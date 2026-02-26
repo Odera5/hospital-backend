@@ -1,15 +1,11 @@
 // src/db.js
 import mongoose from "mongoose";
 
-// Use environment variable for MongoDB URI
-const MONGO_URI = process.env.MONGO_URI;
+const MONGO_URI = process.env.MONGO_URI; // from Render environment variables
 
 const connectDB = async () => {
   try {
-    await mongoose.connect(MONGO_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    });
+    await mongoose.connect(MONGO_URI); // simple, clean connection
     console.log("MongoDB connected successfully!");
   } catch (err) {
     console.error("MongoDB connection failed:", err);
