@@ -3,10 +3,6 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-// ============================
-// Validate environment variables
-// ============================
-
 if (!process.env.JWT_SECRET) {
   throw new Error("JWT_SECRET is not defined in environment variables");
 }
@@ -15,31 +11,23 @@ if (!process.env.JWT_REFRESH_SECRET) {
   throw new Error("JWT_REFRESH_SECRET is not defined in environment variables");
 }
 
-// ============================
-// Generate Access Token (15 mins)
-// ============================
+const resolveUserId = (user) => user.id || user._id;
 
-export const generateAccessToken = (user) => {
-  return jwt.sign(
+export const generateAccessToken = (user) =>
+  jwt.sign(
     {
-      id: user._id,
+      id: resolveUserId(user),
       role: user.role,
     },
     process.env.JWT_SECRET,
-    { expiresIn: "15m" }
+    { expiresIn: "15m" },
   );
-};
 
-// ============================
-// Generate Refresh Token (7 days)
-// ============================
-
-export const generateRefreshToken = (user) => {
-  return jwt.sign(
+export const generateRefreshToken = (user) =>
+  jwt.sign(
     {
-      id: user._id,
+      id: resolveUserId(user),
     },
     process.env.JWT_REFRESH_SECRET,
-    { expiresIn: "7d" }
+    { expiresIn: "7d" },
   );
-};

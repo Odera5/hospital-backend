@@ -1,0 +1,147 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String        @id @default(cuid())
+  name         String
+  email        String        @unique
+  password     String
+  role         String        @default("nurse")
+  isActive     Boolean       @default(true)
+  refreshToken String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  appointments Appointment[]
+  auditLogs    AuditLog[]
+}
+
+model Patient {
+  id             String        @id @default(cuid())
+  name           String
+  cardNumber     String        @default("")
+  age            String
+  email          String        @default("")
+  gender         String        @default("other")
+  phone          String        @default("")
+  address        String        @default("")
+  isDeleted      Boolean       @default(false)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  records        Record[]
+  appointments   Appointment[]
+  waitingEntries WaitingRoom[]
+  invoices       Invoice[]
+  auditLogs      AuditLog[]
+}
+
+model Record {
+  id                    String   @id @default(cuid())
+  patientId             String
+  presentingComplaint   String
+  history               String   @default("")
+  examination           String   @default("")
+  examinationExtraOral  String   @default("")
+  softTissue            String   @default("")
+  periodontalStatus     String   @default("")
+  occlusion             String   @default("")
+  investigation         String   @default("")
+  diagnosis             String   @default("")
+  treatmentPlan         String   @default("")
+  medication            String   @default("")
+  dentition             String   @default("adult")
+  teeth                 Json     @default("[]")
+  attachments           Json     @default("[]")
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  patient               Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId, createdAt])
+}
+
+model Appointment {
+  id              String   @id @default(cuid())
+  patientId       String
+  appointmentDate DateTime
+  timeSlot        String
+  duration        Int      @default(30)
+  appointmentType String   @default("checkup")
+  dentistId       String?
+  notes           String   @default("")
+  status          String   @default("scheduled")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  patient         Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  dentist         User?    @relation(fields: [dentistId], references: [id], onDelete: SetNull)
+
+  @@index([patientId, appointmentDate])
+  @@index([dentistId, appointmentDate])
+}
+
+model WaitingRoom {
+  id                    String   @id @default(cuid())
+  patientId             String
+  patientName           String
+  status                String   @default("waiting")
+  notes                 String   @default("")
+  arrivalTime           DateTime @default(now())
+  calledAt              DateTime?
+  consultationStartedAt DateTime?
+  completedAt           DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  patient               Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([status, arrivalTime])
+}
+
+model Invoice {
+  id             String   @id @default(cuid())
+  invoiceNumber  String   @unique
+  patientId      String
+  treatmentPlanId String?
+  invoiceDate    DateTime @default(now())
+  dueDate        DateTime?
+  items          Json     @default("[]")
+  payments       Json     @default("[]")
+  subtotal       Float    @default(0)
+  tax            Float    @default(0)
+  taxPercentage  Float    @default(0)
+  discount       Float    @default(0)
+  total          Float    @default(0)
+  amountPaid     Float    @default(0)
+  balance        Float    @default(0)
+  status         String   @default("draft")
+  paymentMethod  String   @default("pending")
+  notes          String   @default("")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  patient        Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@index([status])
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  actorId      String?
+  actorRole    String   @default("")
+  action       String
+  resourceType String
+  resourceId   String   @default("")
+  patientId    String?
+  metadata     Json     @default("{}")
+  ipAddress    String   @default("")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  actor        User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  patient      Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+
+  @@index([resourceType, resourceId, createdAt])
+  @@index([patientId, createdAt])
+}

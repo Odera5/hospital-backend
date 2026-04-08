@@ -1,0 +1,48 @@
+import express from "express";
+import { verifyToken } from "../middleware/verifyToken.js";
+import { prisma } from "../lib/prisma.js";
+import {
+  getAllInvoices,
+  getInvoice,
+  createInvoice,
+  updateInvoice,
+  issueInvoice,
+  recordPayment,
+  getInvoiceReport,
+} from "../controllers/invoiceController.js";
+
+const router = express.Router();
+
+router.use(verifyToken);
+
+router.get("/", getAllInvoices);
+router.get("/report", getInvoiceReport);
+router.get("/:id", getInvoice);
+router.post("/", createInvoice);
+router.put("/:id", updateInvoice);
+router.put("/:id/issue", issueInvoice);
+router.put("/:id/payment", recordPayment);
+
+router.delete("/:id", async (req, res) => {
+  try {
+    const invoice = await prisma.invoice.findUnique({
+      where: { id: req.params.id },
+    });
+
+    if (!invoice) {
+      return res.status(404).json({ message: "Invoice not found" });
+    }
+
+    await prisma.invoice.update({
+      where: { id: invoice.id },
+      data: { status: "cancelled" },
+    });
+
+    res.json({ message: "Invoice cancelled" });
+  } catch (error) {
+    console.error("Delete invoice error:", error.message);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+export default router;

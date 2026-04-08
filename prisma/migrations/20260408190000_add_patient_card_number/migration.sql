@@ -1,0 +1,2 @@
+ALTER TABLE "Patient"
+ADD COLUMN "cardNumber" TEXT NOT NULL DEFAULT '';
