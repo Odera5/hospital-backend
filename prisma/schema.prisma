@@ -13,16 +13,21 @@ model User {
   email        String        @unique
   password     String
   role         String        @default("nurse")
+  clinicId     String
   isActive     Boolean       @default(true)
   refreshToken String?
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
+  clinic       Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   appointments Appointment[]
   auditLogs    AuditLog[]
+
+  @@index([clinicId, role])
 }
 
 model Patient {
   id             String        @id @default(cuid())
+  clinicId       String
   name           String
   cardNumber     String        @default("")
   age            String
@@ -33,11 +38,31 @@ model Patient {
   isDeleted      Boolean       @default(false)
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
+  clinic         Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   records        Record[]
   appointments   Appointment[]
   waitingEntries WaitingRoom[]
   invoices       Invoice[]
   auditLogs      AuditLog[]
+
+  @@index([clinicId, createdAt])
+  @@index([clinicId, isDeleted])
+}
+
+model Clinic {
+  id             String    @id @default(cuid())
+  name           String
+  email          String    @unique
+  phone          String    @default("")
+  city           String    @default("")
+  address        String    @default("")
+  contactPerson  String    @default("")
+  procedurePresetPrices Json @default("[]")
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  users          User[]
+  patients       Patient[]
 }
 
 model Record {

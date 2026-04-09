@@ -68,8 +68,11 @@ export function toEncryptedPatientData(data = {}) {
 export function toDecryptedPatient(patient) {
   if (!patient) return null;
 
+  const resolvedId = patient.id || patient._id || null;
+
   return {
-    _id: patient.id || patient._id,
+    id: resolvedId,
+    _id: resolvedId,
     ...patient,
     name:
       typeof patient.name === "string"

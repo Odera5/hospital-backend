@@ -69,8 +69,8 @@ const buildExaminationSummary = ({
   return sections.map(([label, value]) => `${label}: ${value}`).join("\n");
 };
 
-const getPatientOr404 = async (id) => {
-  const patient = await prisma.patient.findUnique({ where: { id } });
+const getPatientOr404 = async (id, clinicId) => {
+  const patient = await prisma.patient.findFirst({ where: { id, clinicId } });
   if (!patient || patient.isDeleted) return null;
   return patient;
 };
@@ -82,7 +82,7 @@ router.get(
   async (req, res) => {
     try {
       const patients = await prisma.patient.findMany({
-        where: { isDeleted: false },
+        where: { clinicId: req.user.clinicId, isDeleted: false },
         orderBy: { createdAt: "desc" },
       });
 
@@ -101,7 +101,7 @@ router.get(
   async (req, res) => {
     try {
       const trash = await prisma.patient.findMany({
-        where: { isDeleted: true },
+        where: { clinicId: req.user.clinicId, isDeleted: true },
         orderBy: { createdAt: "desc" },
       });
 
@@ -119,7 +119,7 @@ router.get(
   authorizeRoles("admin", "doctor", "nurse"),
   async (req, res) => {
     try {
-      const patient = await getPatientOr404(req.params.id);
+      const patient = await getPatientOr404(req.params.id, req.user.clinicId);
       if (!patient) return res.status(404).json({ message: "Patient not found" });
 
       res.json(toDecryptedPatient(patient));
@@ -150,6 +150,7 @@ router.post(
 
       const patient = await prisma.patient.create({
         data: {
+          clinicId: req.user.clinicId,
           ...toEncryptedPatientData({
             name,
             cardNumber,
@@ -201,7 +202,7 @@ router.put(
   authorizeRoles("admin", "doctor"),
   async (req, res) => {
     try {
-      const existingPatient = await getPatientOr404(req.params.id);
+      const existingPatient = await getPatientOr404(req.params.id, req.user.clinicId);
       if (!existingPatient) {
         return res.status(404).json({ message: "Patient not found" });
       }
@@ -212,7 +213,7 @@ router.put(
       };
 
       const patient = await prisma.patient.update({
-        where: { id: req.params.id },
+        where: { id: existingPatient.id },
         data: {
           ...toEncryptedPatientData({
             name: updates.name,
@@ -240,11 +241,11 @@ router.delete(
   authorizeRoles("admin", "doctor", "nurse"),
   async (req, res) => {
     try {
-      const patient = await getPatientOr404(req.params.id);
+      const patient = await getPatientOr404(req.params.id, req.user.clinicId);
       if (!patient) return res.status(404).json({ message: "Patient not found" });
 
       const updatedPatient = await prisma.patient.update({
-        where: { id: req.params.id },
+        where: { id: patient.id },
         data: { isDeleted: true },
       });
 
@@ -269,7 +270,11 @@ router.put(
         where: { id: req.params.id },
       });
 
-      if (!patient || !patient.isDeleted) {
+      if (
+        !patient ||
+        patient.clinicId !== req.user.clinicId ||
+        !patient.isDeleted
+      ) {
         return res.status(404).json({ message: "Patient not found in Trash" });
       }
 
@@ -298,7 +303,14 @@ router.delete(
       const patient = await prisma.patient.findUnique({
         where: { id: req.params.id },
       });
-      if (!patient) return res.status(404).json({ message: "Patient not found" });
+      if (!patient || patient.clinicId !== req.user.clinicId) {
+        return res.status(404).json({ message: "Patient not found" });
+      }
+      if (!patient.isDeleted) {
+        return res.status(400).json({
+          message: "Only patients already moved to Trash can be permanently deleted",
+        });
+      }
 
       await prisma.patient.delete({ where: { id: req.params.id } });
       res.json({ message: "Patient permanently deleted" });
@@ -316,7 +328,7 @@ router.post(
   upload.array("attachments"),
   async (req, res) => {
     try {
-      const patient = await getPatientOr404(req.params.id);
+      const patient = await getPatientOr404(req.params.id, req.user.clinicId);
       if (!patient) return res.status(404).json({ message: "Patient not found" });
 
       const {
@@ -407,7 +419,7 @@ router.put(
   upload.array("attachments"),
   async (req, res) => {
     try {
-      const patient = await getPatientOr404(req.params.id);
+      const patient = await getPatientOr404(req.params.id, req.user.clinicId);
       if (!patient) return res.status(404).json({ message: "Patient not found" });
 
       const record = await prisma.record.findUnique({
@@ -513,7 +525,7 @@ router.get(
   authorizeRoles("admin", "doctor", "nurse"),
   async (req, res) => {
     try {
-      const patient = await getPatientOr404(req.params.id);
+      const patient = await getPatientOr404(req.params.id, req.user.clinicId);
       if (!patient) return res.status(404).json({ message: "Patient not found" });
 
       const fileName = path.basename(req.params.filename);
@@ -551,7 +563,7 @@ router.get(
   authorizeRoles("admin", "doctor", "nurse"),
   async (req, res) => {
     try {
-      const patient = await getPatientOr404(req.params.id);
+      const patient = await getPatientOr404(req.params.id, req.user.clinicId);
       if (!patient) return res.status(404).json({ message: "Patient not found" });
 
       const records = await prisma.record.findMany({
@@ -573,7 +585,7 @@ router.delete(
   authorizeRoles("admin", "doctor"),
   async (req, res) => {
     try {
-      const patient = await getPatientOr404(req.params.id);
+      const patient = await getPatientOr404(req.params.id, req.user.clinicId);
       if (!patient) return res.status(404).json({ message: "Patient not found" });
 
       const record = await prisma.record.findUnique({

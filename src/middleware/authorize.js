@@ -18,9 +18,10 @@ export const protect = async (req, res, next) => {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const users = await prisma.$queryRaw`
-      SELECT id, name, email, role, "isActive"
-      FROM "User"
-      WHERE id = ${decoded.id}
+      SELECT u.id, u.name, u.email, u.role, u."isActive", u."clinicId", c."isActive" AS "clinicIsActive"
+      FROM "User" u
+      INNER JOIN "Clinic" c ON c.id = u."clinicId"
+      WHERE u.id = ${decoded.id}
       LIMIT 1
     `;
     const user = users[0] ?? null;
@@ -28,6 +29,11 @@ export const protect = async (req, res, next) => {
     if (!user) return res.status(401).json({ message: "User not found" });
     if (!user.isActive) {
       return res.status(403).json({ message: "Your staff account has been deactivated" });
+    }
+    if (!user.clinicIsActive) {
+      return res.status(403).json({
+        message: "Your clinic account has been deactivated. Contact support for reactivation.",
+      });
     }
 
     req.user = user;

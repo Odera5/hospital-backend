@@ -18,6 +18,8 @@ export const generateAccessToken = (user) =>
     {
       id: resolveUserId(user),
       role: user.role,
+      clinicId: user.clinicId,
+      clinicName: user.clinic?.name || user.clinicName || "",
     },
     process.env.JWT_SECRET,
     { expiresIn: "15m" },

@@ -38,8 +38,11 @@ export const getAllAppointments = async (req, res) => {
       : [];
 
     const where = {
+      patient: {
+        clinicId: req.user.clinicId,
+      },
       ...(patientId ? { patientId } : {}),
-      ...(dentistId ? { dentistId } : {}),
+      ...(dentistId ? { dentistId, dentist: { clinicId: req.user.clinicId } } : {}),
       ...(buildDateFilter(startDate, endDate)
         ? { appointmentDate: buildDateFilter(startDate, endDate) }
         : {}),
@@ -84,8 +87,11 @@ export const getAllAppointments = async (req, res) => {
 
 export const getAppointment = async (req, res) => {
   try {
-    const appointment = await prisma.appointment.findUnique({
-      where: { id: req.params.id },
+    const appointment = await prisma.appointment.findFirst({
+      where: {
+        id: req.params.id,
+        patient: { clinicId: req.user.clinicId },
+      },
       include: {
         patient: true,
         dentist: {
@@ -134,9 +140,25 @@ export const createAppointment = async (req, res) => {
         .json({ message: "Patient ID, date, and time slot required" });
     }
 
-    const patient = await prisma.patient.findUnique({ where: { id: patientId } });
+    const patient = await prisma.patient.findFirst({
+      where: { id: patientId, clinicId: req.user.clinicId },
+    });
     if (!patient || patient.isDeleted) {
       return res.status(404).json({ message: "Patient not found" });
+    }
+
+    if (dentistId) {
+      const dentist = await prisma.user.findFirst({
+        where: {
+          id: dentistId,
+          clinicId: req.user.clinicId,
+          isActive: true,
+        },
+      });
+
+      if (!dentist) {
+        return res.status(404).json({ message: "Staff member not found for this clinic" });
+      }
     }
 
     const appointmentDay = new Date(appointmentDate);
@@ -147,6 +169,7 @@ export const createAppointment = async (req, res) => {
 
     const existing = await prisma.appointment.findFirst({
       where: {
+        patient: { clinicId: req.user.clinicId },
         appointmentDate: {
           gte: startOfDay,
           lte: endOfDay,
@@ -210,10 +233,25 @@ export const updateAppointment = async (req, res) => {
 
     const appointment = await prisma.appointment.findUnique({
       where: { id: req.params.id },
+      include: { patient: true },
     });
 
-    if (!appointment) {
+    if (!appointment || appointment.patient.clinicId !== req.user.clinicId) {
       return res.status(404).json({ message: "Appointment not found" });
+    }
+
+    if (dentistId) {
+      const dentist = await prisma.user.findFirst({
+        where: {
+          id: dentistId,
+          clinicId: req.user.clinicId,
+          isActive: true,
+        },
+      });
+
+      if (!dentist) {
+        return res.status(404).json({ message: "Staff member not found for this clinic" });
+      }
     }
 
     const isClosedAppointment = [
@@ -259,6 +297,7 @@ export const updateAppointment = async (req, res) => {
       const existing = await prisma.appointment.findFirst({
         where: {
           id: { not: appointment.id },
+          patient: { clinicId: req.user.clinicId },
           appointmentDate: {
             gte: startOfDay,
             lte: endOfDay,
@@ -312,13 +351,22 @@ export const updateAppointment = async (req, res) => {
 
 export const deleteAppointment = async (req, res) => {
   try {
-    const appointment = await prisma.appointment.delete({
+    const appointment = await prisma.appointment.findUnique({
       where: { id: req.params.id },
+      include: {
+        patient: {
+          select: { clinicId: true },
+        },
+      },
     });
 
-    if (!appointment) {
+    if (!appointment || appointment.patient?.clinicId !== req.user.clinicId) {
       return res.status(404).json({ message: "Appointment not found" });
     }
+
+    await prisma.appointment.delete({
+      where: { id: appointment.id },
+    });
 
     res.json({ message: "Appointment cancelled" });
   } catch (error) {
@@ -358,6 +406,7 @@ export const getAvailableSlots = async (req, res) => {
 
     const booked = await prisma.appointment.findMany({
       where: {
+        patient: { clinicId: req.user.clinicId },
         appointmentDate: {
           gte: startOfDay,
           lte: endOfDay,

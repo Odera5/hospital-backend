@@ -7,65 +7,296 @@ import { generateAccessToken, generateRefreshToken } from "../utils/jwt.js";
 
 const router = express.Router();
 const STAFF_ROLES = ["admin", "doctor", "nurse"];
+const DEFAULT_PROCEDURE_PRESETS = [
+  { description: "Consultation", category: "service", unitPrice: 5000 },
+  { description: "Scaling and Polishing", category: "procedure", unitPrice: 15000 },
+  { description: "Tooth Extraction", category: "procedure", unitPrice: 12000 },
+  { description: "Dental Filling", category: "procedure", unitPrice: 10000 },
+  { description: "Root Canal Treatment", category: "procedure", unitPrice: 45000 },
+  { description: "Dental X-Ray", category: "lab", unitPrice: 8000 },
+  { description: "Medication Dispensing", category: "medication", unitPrice: 3500 },
+];
+
+const normalizeProcedurePresetPrices = (value) => {
+  const incoming =
+    Array.isArray(value) && value.length > 0 ? value : DEFAULT_PROCEDURE_PRESETS;
+
+  return incoming.map((preset, index) => {
+    const fallback = DEFAULT_PROCEDURE_PRESETS[index] || DEFAULT_PROCEDURE_PRESETS[0];
+    const unitPrice = Number(preset?.unitPrice);
+
+    return {
+      description: String(preset?.description || fallback.description || "").trim(),
+      category: String(preset?.category || fallback.category || "service").trim() || "service",
+      unitPrice: Number.isFinite(unitPrice) && unitPrice >= 0 ? unitPrice : fallback.unitPrice,
+    };
+  });
+};
+
+const serializeClinic = (clinic) =>
+  clinic
+    ? {
+        id: clinic.id,
+        name: clinic.name,
+        email: clinic.email,
+        phone: clinic.phone,
+        city: clinic.city,
+        address: clinic.address,
+        contactPerson: clinic.contactPerson,
+        procedurePresetPrices: normalizeProcedurePresetPrices(clinic.procedurePresetPrices),
+        isActive: Boolean(clinic.isActive),
+        createdAt: clinic.createdAt,
+      }
+    : null;
 
 const serializeUser = (user) => ({
   id: user.id,
   name: user.name,
   email: user.email,
   role: user.role,
+  clinicId: user.clinicId,
+  clinic: serializeClinic(user.clinic),
   isActive: Boolean(user.isActive),
   createdAt: user.createdAt,
 });
 
-const getUserById = async (userId) => {
-  const users = await prisma.$queryRaw`
-    SELECT id, name, email, password, role, "isActive", "refreshToken", "createdAt", "updatedAt"
-    FROM "User"
-    WHERE id = ${userId}
-    LIMIT 1
-  `;
+const getUserById = (userId) =>
+  prisma.user.findUnique({
+    where: { id: userId },
+    include: { clinic: true },
+  });
 
-  return users[0] ?? null;
-};
+const getUserByEmail = (email) =>
+  prisma.user.findUnique({
+    where: { email },
+    include: { clinic: true },
+  });
 
-const getUserByEmail = async (email) => {
-  const users = await prisma.$queryRaw`
-    SELECT id, name, email, password, role, "isActive", "refreshToken", "createdAt", "updatedAt"
-    FROM "User"
-    WHERE email = ${email}
-    LIMIT 1
-  `;
-
-  return users[0] ?? null;
-};
-
-const getAllStaff = async () => {
-  return prisma.$queryRaw`
-    SELECT id, name, email, role, "isActive", "createdAt"
-    FROM "User"
-    ORDER BY "createdAt" DESC, name ASC
-  `;
-};
-
-const ensureAnotherActiveAdminExists = async (userId) => {
-  const adminCounts = await prisma.$queryRaw`
-    SELECT COUNT(*)::int AS count
-    FROM "User"
-    WHERE role = 'admin' AND "isActive" = true
-  `;
-  const activeAdminCount = adminCounts[0]?.count || 0;
+const ensureAnotherActiveAdminExists = async (userId, clinicId) => {
   const targetUser = await getUserById(userId);
 
-  if (
-    targetUser?.role === "admin" &&
-    targetUser.isActive &&
-    activeAdminCount <= 1
-  ) {
+  if (!targetUser || targetUser.clinicId !== clinicId) {
     return false;
   }
 
-  return true;
+  if (targetUser.role !== "admin" || !targetUser.isActive) {
+    return true;
+  }
+
+  const activeAdminCount = await prisma.user.count({
+    where: {
+      clinicId,
+      role: "admin",
+      isActive: true,
+    },
+  });
+
+  return activeAdminCount > 1;
 };
+
+router.get("/clinic-profile", protect, async (req, res) => {
+  try {
+    const clinic = await prisma.clinic.findUnique({
+      where: { id: req.user.clinicId },
+    });
+
+    if (!clinic) {
+      return res.status(404).json({ message: "Clinic profile not found" });
+    }
+
+    res.json({ clinic: serializeClinic(clinic) });
+  } catch (error) {
+    console.error("Get clinic profile error:", error);
+    res.status(500).json({ message: "Failed to fetch clinic profile" });
+  }
+});
+
+router.put("/clinic-profile", protect, authorizeRoles("admin"), async (req, res) => {
+  try {
+    const clinicName = req.body?.clinicName?.trim();
+    const clinicEmail = req.body?.clinicEmail?.trim().toLowerCase();
+    const clinicPhone = req.body?.clinicPhone?.trim() || "";
+    const clinicCity = req.body?.clinicCity?.trim() || "";
+    const clinicAddress = req.body?.clinicAddress?.trim() || "";
+    const contactPerson = req.body?.contactPerson?.trim() || "";
+    const procedurePresetPrices = normalizeProcedurePresetPrices(
+      req.body?.procedurePresetPrices,
+    );
+
+    if (!clinicName || !clinicEmail) {
+      return res.status(400).json({
+        message: "Clinic name and clinic email are required",
+      });
+    }
+
+    const existingClinic = await prisma.clinic.findFirst({
+      where: {
+        email: clinicEmail,
+        id: { not: req.user.clinicId },
+      },
+      select: { id: true },
+    });
+
+    if (existingClinic) {
+      return res.status(400).json({
+        message: "Another clinic is already using this email address",
+      });
+    }
+
+    const clinic = await prisma.clinic.update({
+      where: { id: req.user.clinicId },
+      data: {
+        name: clinicName,
+        email: clinicEmail,
+        phone: clinicPhone,
+        city: clinicCity,
+        address: clinicAddress,
+        contactPerson,
+        procedurePresetPrices,
+      },
+    });
+
+    res.json({
+      message: "Clinic profile updated successfully",
+      clinic: serializeClinic(clinic),
+    });
+  } catch (error) {
+    console.error("Update clinic profile error:", error);
+    res.status(500).json({ message: "Failed to update clinic profile" });
+  }
+});
+
+router.patch("/clinic-profile/deactivate", protect, authorizeRoles("admin"), async (req, res) => {
+  try {
+    const activeAdminCount = await prisma.user.count({
+      where: {
+        clinicId: req.user.clinicId,
+        role: "admin",
+        isActive: true,
+      },
+    });
+
+    if (activeAdminCount === 0) {
+      return res.status(400).json({
+        message: "No active admin account found for this clinic",
+      });
+    }
+
+    const clinic = await prisma.clinic.update({
+      where: { id: req.user.clinicId },
+      data: { isActive: false },
+    });
+
+    await prisma.user.updateMany({
+      where: { clinicId: req.user.clinicId },
+      data: { refreshToken: null },
+    });
+
+    res.json({
+      message:
+        "Clinic deactivated successfully. All staff logins are now blocked until support reactivates the clinic.",
+      clinic: serializeClinic(clinic),
+    });
+  } catch (error) {
+    console.error("Deactivate clinic error:", error);
+    res.status(500).json({ message: "Failed to deactivate clinic" });
+  }
+});
+
+router.post("/register-clinic", async (req, res) => {
+  try {
+    const {
+      clinicName,
+      clinicEmail,
+      clinicPhone,
+      clinicCity,
+      clinicAddress,
+      adminName,
+      adminEmail,
+      password,
+    } = req.body;
+
+    if (
+      !clinicName?.trim() ||
+      !clinicEmail?.trim() ||
+      !adminName?.trim() ||
+      !adminEmail?.trim() ||
+      !password?.trim()
+    ) {
+      return res.status(400).json({
+        message:
+          "Clinic name, clinic email, admin name, admin email, and password are required",
+      });
+    }
+
+    const normalizedClinicEmail = clinicEmail.toLowerCase().trim();
+    const normalizedAdminEmail = adminEmail.toLowerCase().trim();
+
+    const [existingClinic, existingAdmin] = await Promise.all([
+      prisma.clinic.findUnique({ where: { email: normalizedClinicEmail } }),
+      prisma.user.findUnique({ where: { email: normalizedAdminEmail } }),
+    ]);
+
+    if (existingClinic) {
+      return res.status(400).json({
+        message: "A clinic with this email has already been registered",
+      });
+    }
+
+    if (existingAdmin) {
+      return res.status(400).json({
+        message: "A user with this admin email already exists",
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(password.trim(), 10);
+
+    const { clinic, adminUser } = await prisma.$transaction(async (tx) => {
+      const createdClinic = await tx.clinic.create({
+        data: {
+          name: clinicName.trim(),
+          email: normalizedClinicEmail,
+          phone: clinicPhone?.trim() || "",
+          city: clinicCity?.trim() || "",
+          address: clinicAddress?.trim() || "",
+          contactPerson: adminName.trim(),
+        },
+      });
+
+      const createdAdmin = await tx.user.create({
+        data: {
+          name: adminName.trim(),
+          email: normalizedAdminEmail,
+          password: hashedPassword,
+          role: "admin",
+          clinicId: createdClinic.id,
+        },
+        include: { clinic: true },
+      });
+
+      return { clinic: createdClinic, adminUser: createdAdmin };
+    });
+
+    const accessToken = generateAccessToken(adminUser);
+    const refreshToken = generateRefreshToken(adminUser);
+
+    await prisma.user.update({
+      where: { id: adminUser.id },
+      data: { refreshToken },
+    });
+
+    res.status(201).json({
+      message: "Clinic registered successfully",
+      accessToken,
+      refreshToken,
+      clinic: serializeClinic(clinic),
+      user: serializeUser(adminUser),
+    });
+  } catch (error) {
+    console.error("Clinic registration error:", error);
+    res.status(500).json({ message: "Failed to register clinic" });
+  }
+});
 
 router.post("/signup", protect, authorizeRoles("admin"), async (req, res) => {
   try {
@@ -95,15 +326,9 @@ router.post("/signup", protect, authorizeRoles("admin"), async (req, res) => {
         email: normalizedEmail,
         password: hashedPassword,
         role: role || "nurse",
+        clinicId: req.user.clinicId,
       },
-    });
-
-    const accessToken = generateAccessToken(newUser);
-    const refreshToken = generateRefreshToken(newUser);
-
-    await prisma.user.update({
-      where: { id: newUser.id },
-      data: { refreshToken },
+      include: { clinic: true },
     });
 
     res.status(201).json({
@@ -118,7 +343,11 @@ router.post("/signup", protect, authorizeRoles("admin"), async (req, res) => {
 
 router.get("/staff", protect, authorizeRoles("admin"), async (req, res) => {
   try {
-    const staff = await getAllStaff();
+    const staff = await prisma.user.findMany({
+      where: { clinicId: req.user.clinicId },
+      include: { clinic: true },
+      orderBy: [{ createdAt: "desc" }, { name: "asc" }],
+    });
 
     res.json(staff.map(serializeUser));
   } catch (error) {
@@ -132,7 +361,7 @@ router.patch("/staff/:id/status", protect, authorizeRoles("admin"), async (req, 
     const isActive = Boolean(req.body?.isActive);
     const existingUser = await getUserById(req.params.id);
 
-    if (!existingUser) {
+    if (!existingUser || existingUser.clinicId !== req.user.clinicId) {
       return res.status(404).json({ message: "Staff account not found" });
     }
 
@@ -141,7 +370,10 @@ router.patch("/staff/:id/status", protect, authorizeRoles("admin"), async (req, 
     }
 
     if (!isActive) {
-      const canDeactivate = await ensureAnotherActiveAdminExists(existingUser.id);
+      const canDeactivate = await ensureAnotherActiveAdminExists(
+        existingUser.id,
+        req.user.clinicId,
+      );
       if (!canDeactivate) {
         return res.status(400).json({
           message: "You cannot deactivate the last active admin account",
@@ -149,14 +381,14 @@ router.patch("/staff/:id/status", protect, authorizeRoles("admin"), async (req, 
       }
     }
 
-    await prisma.$executeRaw`
-      UPDATE "User"
-      SET "isActive" = ${isActive},
-          "refreshToken" = ${isActive ? existingUser.refreshToken : null},
-          "updatedAt" = NOW()
-      WHERE id = ${existingUser.id}
-    `;
-    const updatedUser = await getUserById(existingUser.id);
+    const updatedUser = await prisma.user.update({
+      where: { id: existingUser.id },
+      data: {
+        isActive,
+        refreshToken: isActive ? existingUser.refreshToken : null,
+      },
+      include: { clinic: true },
+    });
 
     res.json({
       message: isActive ? "Staff account activated" : "Staff account deactivated",
@@ -172,7 +404,7 @@ router.delete("/staff/:id", protect, authorizeRoles("admin"), async (req, res) =
   try {
     const existingUser = await getUserById(req.params.id);
 
-    if (!existingUser) {
+    if (!existingUser || existingUser.clinicId !== req.user.clinicId) {
       return res.status(404).json({ message: "Staff account not found" });
     }
 
@@ -180,7 +412,10 @@ router.delete("/staff/:id", protect, authorizeRoles("admin"), async (req, res) =
       return res.status(400).json({ message: "You cannot delete your own account" });
     }
 
-    const canDelete = await ensureAnotherActiveAdminExists(existingUser.id);
+    const canDelete = await ensureAnotherActiveAdminExists(
+      existingUser.id,
+      req.user.clinicId,
+    );
     if (!canDelete) {
       return res.status(400).json({
         message: "You cannot delete the last active admin account",
@@ -210,6 +445,11 @@ router.post("/login", async (req, res) => {
     if (!user) return res.status(404).json({ message: "User not found" });
     if (!user.isActive) {
       return res.status(403).json({ message: "Your staff account has been deactivated" });
+    }
+    if (!user.clinic?.isActive) {
+      return res.status(403).json({
+        message: "Your clinic account has been deactivated. Contact support for reactivation.",
+      });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
@@ -249,6 +489,11 @@ router.post("/refresh-token", async (req, res) => {
     }
     if (!user.isActive) {
       return res.status(403).json({ message: "Your staff account has been deactivated" });
+    }
+    if (!user.clinic?.isActive) {
+      return res.status(403).json({
+        message: "Your clinic account has been deactivated. Contact support for reactivation.",
+      });
     }
 
     const newAccessToken = generateAccessToken(user);

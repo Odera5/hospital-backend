@@ -87,6 +87,9 @@ export const getAllInvoices = async (req, res) => {
 
     const invoices = await prisma.invoice.findMany({
       where: {
+        patient: {
+          clinicId: req.user.clinicId,
+        },
         ...(patientId ? { patientId } : {}),
         ...(status ? { status } : {}),
         ...((startDate || endDate)
@@ -116,7 +119,9 @@ export const getInvoice = async (req, res) => {
       include: invoiceInclude,
     });
 
-    if (!invoice) return res.status(404).json({ message: "Invoice not found" });
+    if (!invoice || invoice.patient.clinicId !== req.user.clinicId) {
+      return res.status(404).json({ message: "Invoice not found" });
+    }
 
     res.json(serializeInvoiceResult(invoice));
   } catch (error) {
@@ -145,7 +150,9 @@ export const createInvoice = async (req, res) => {
         .json({ message: "Patient ID and items required" });
     }
 
-    const patient = await prisma.patient.findUnique({ where: { id: patientId } });
+    const patient = await prisma.patient.findFirst({
+      where: { id: patientId, clinicId: req.user.clinicId },
+    });
     if (!patient || patient.isDeleted) {
       return res.status(404).json({ message: "Patient not found" });
     }
@@ -211,8 +218,11 @@ export const updateInvoice = async (req, res) => {
 
     const invoice = await prisma.invoice.findUnique({
       where: { id: req.params.id },
+      include: { patient: { select: { clinicId: true } } },
     });
-    if (!invoice) return res.status(404).json({ message: "Invoice not found" });
+    if (!invoice || invoice.patient.clinicId !== req.user.clinicId) {
+      return res.status(404).json({ message: "Invoice not found" });
+    }
 
     const normalizedItems =
       items !== undefined ? normalizeItems(items) : normalizeItems(invoice.items);
@@ -230,6 +240,17 @@ export const updateInvoice = async (req, res) => {
     const nextAmountPaid =
       amountPaid !== undefined ? Number(amountPaid) : sumPayments(normalizedPayments);
     const balance = total - nextAmountPaid;
+
+    if (nextAmountPaid < 0) {
+      return res.status(400).json({ message: "Amount paid cannot be negative" });
+    }
+
+    if (nextAmountPaid > total) {
+      return res.status(400).json({
+        message: "Amount paid cannot be greater than the invoice total",
+      });
+    }
+
     const nextStatus = status
       ? status
       : getInvoiceStatus({
@@ -284,8 +305,11 @@ export const issueInvoice = async (req, res) => {
   try {
     const invoice = await prisma.invoice.findUnique({
       where: { id: req.params.id },
+      include: { patient: { select: { clinicId: true } } },
     });
-    if (!invoice) return res.status(404).json({ message: "Invoice not found" });
+    if (!invoice || invoice.patient.clinicId !== req.user.clinicId) {
+      return res.status(404).json({ message: "Invoice not found" });
+    }
 
     const updatedInvoice = await prisma.invoice.update({
       where: { id: invoice.id },
@@ -322,10 +346,21 @@ export const recordPayment = async (req, res) => {
 
     const invoice = await prisma.invoice.findUnique({
       where: { id: req.params.id },
+      include: { patient: { select: { clinicId: true } } },
     });
-    if (!invoice) return res.status(404).json({ message: "Invoice not found" });
+    if (!invoice || invoice.patient.clinicId !== req.user.clinicId) {
+      return res.status(404).json({ message: "Invoice not found" });
+    }
 
     const existingPayments = normalizePayments(invoice.payments);
+    const remainingBalance = Math.max(0, Number(invoice.balance) || 0);
+
+    if (paymentAmount > remainingBalance) {
+      return res.status(400).json({
+        message: `Payment exceeds remaining balance of ${remainingBalance.toFixed(2)}`,
+      });
+    }
+
     const nextPayments = [
       ...existingPayments,
       {
@@ -387,6 +422,9 @@ export const getInvoiceReport = async (req, res) => {
 
     const invoices = await prisma.invoice.findMany({
       where: {
+        patient: {
+          clinicId: req.user.clinicId,
+        },
         status: { not: "draft" },
         ...((startDate || endDate)
           ? {

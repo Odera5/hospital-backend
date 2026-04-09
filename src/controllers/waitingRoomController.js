@@ -32,6 +32,7 @@ export const getWaitingList = async (req, res) => {
 
     const items = await prisma.waitingRoom.findMany({
       where: {
+        patient: { clinicId: req.user.clinicId },
         ...(status ? { status } : {}),
         ...(search
           ? {
@@ -55,12 +56,16 @@ export const getWaitingList = async (req, res) => {
 
 export const getWaitingSummary = async (req, res) => {
   try {
+    const baseWhere = {
+      patient: { clinicId: req.user.clinicId },
+    };
+
     const [waiting, called, inConsultation, completed, total] = await Promise.all([
-      prisma.waitingRoom.count({ where: { status: "waiting" } }),
-      prisma.waitingRoom.count({ where: { status: "called" } }),
-      prisma.waitingRoom.count({ where: { status: "in_consultation" } }),
-      prisma.waitingRoom.count({ where: { status: "completed" } }),
-      prisma.waitingRoom.count(),
+      prisma.waitingRoom.count({ where: { ...baseWhere, status: "waiting" } }),
+      prisma.waitingRoom.count({ where: { ...baseWhere, status: "called" } }),
+      prisma.waitingRoom.count({ where: { ...baseWhere, status: "in_consultation" } }),
+      prisma.waitingRoom.count({ where: { ...baseWhere, status: "completed" } }),
+      prisma.waitingRoom.count({ where: baseWhere }),
     ]);
 
     res.json({
@@ -83,7 +88,9 @@ export const createWaitingEntry = async (req, res) => {
       return res.status(400).json({ message: "Patient ID is required" });
     }
 
-    const patient = await prisma.patient.findUnique({ where: { id: patientId } });
+    const patient = await prisma.patient.findFirst({
+      where: { id: patientId, clinicId: req.user.clinicId },
+    });
     if (!patient || patient.isDeleted) {
       return res.status(404).json({ message: "Patient not found" });
     }
@@ -156,7 +163,9 @@ export const updateWaitingEntry = async (req, res) => {
       include: { patient: true },
     });
 
-    if (!item) return res.status(404).json({ message: "Queue item not found" });
+    if (!item || item.patient.clinicId !== req.user.clinicId) {
+      return res.status(404).json({ message: "Queue item not found" });
+    }
 
     const updateData = {};
     if (status && status !== item.status) {
@@ -194,8 +203,15 @@ export const deleteWaitingEntry = async (req, res) => {
   try {
     const item = await prisma.waitingRoom.findUnique({
       where: { id: req.params.id },
+      include: {
+        patient: {
+          select: { clinicId: true },
+        },
+      },
     });
-    if (!item) return res.status(404).json({ message: "Queue item not found" });
+    if (!item || item.patient?.clinicId !== req.user.clinicId) {
+      return res.status(404).json({ message: "Queue item not found" });
+    }
 
     await prisma.waitingRoom.delete({ where: { id: item.id } });
     await logAuditEvent(req, {

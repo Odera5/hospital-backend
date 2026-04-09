@@ -27,9 +27,14 @@ router.delete("/:id", async (req, res) => {
   try {
     const invoice = await prisma.invoice.findUnique({
       where: { id: req.params.id },
+      include: {
+        patient: {
+          select: { clinicId: true },
+        },
+      },
     });
 
-    if (!invoice) {
+    if (!invoice || invoice.patient?.clinicId !== req.user.clinicId) {
       return res.status(404).json({ message: "Invoice not found" });
     }
 
