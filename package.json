@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start": "node src/server.js",
+    "prisma:generate": "prisma generate",
+    "db:deploy": "prisma migrate deploy",
+    "postinstall": "prisma generate",
+    "start": "prisma migrate deploy && node src/server.js",
     "dev": "nodemon src/server.js",
     "migrate:mongo": "node src/scripts/migrateMongoToPostgres.js"
   },
@@ -19,7 +22,8 @@
     "express-validator": "^7.3.1",
     "jsonwebtoken": "^9.0.3",
     "mongodb": "^6.17.0",
-    "multer": "^2.0.2"
+    "multer": "^2.0.2",
+    "nodemailer": "^7.0.13"
   },
   "devDependencies": {
     "nodemon": "^3.1.11",

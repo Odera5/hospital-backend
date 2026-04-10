@@ -15,7 +15,7 @@ model User {
   role         String        @default("nurse")
   clinicId     String
   isActive     Boolean       @default(true)
-  emailVerified Boolean      @default(true)
+  emailVerified Boolean      @default(false)
   emailVerificationToken String?
   emailVerificationExpiresAt DateTime?
   refreshToken String?

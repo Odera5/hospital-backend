@@ -4,6 +4,11 @@ import bcrypt from "bcrypt";
 import { prisma } from "../lib/prisma.js";
 import { protect, authorizeRoles } from "../middleware/authorize.js";
 import { generateAccessToken, generateRefreshToken } from "../utils/jwt.js";
+import {
+  createEmailVerification,
+  getVerificationErrorMessage,
+  sendVerificationEmail,
+} from "../services/emailVerification.js";
 
 const router = express.Router();
 const STAFF_ROLES = ["admin", "doctor", "nurse"];
@@ -57,6 +62,7 @@ const serializeUser = (user) => ({
   clinicId: user.clinicId,
   clinic: serializeClinic(user.clinic),
   isActive: Boolean(user.isActive),
+  emailVerified: Boolean(user.emailVerified),
   createdAt: user.createdAt,
 });
 
@@ -71,6 +77,27 @@ const getUserByEmail = (email) =>
     where: { email },
     include: { clinic: true },
   });
+
+const refreshVerificationForUser = async (user) => {
+  const verification = createEmailVerification();
+
+  const updatedUser = await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      emailVerificationToken: verification.token,
+      emailVerificationExpiresAt: verification.expiresAt,
+    },
+    include: { clinic: true },
+  });
+
+  await sendVerificationEmail({
+    email: updatedUser.email,
+    name: updatedUser.name,
+    token: verification.token,
+  });
+
+  return updatedUser;
+};
 
 const ensureAnotherActiveAdminExists = async (userId, clinicId) => {
   const targetUser = await getUserById(userId);
@@ -250,6 +277,7 @@ router.post("/register-clinic", async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password.trim(), 10);
+    const verification = createEmailVerification();
 
     const { clinic, adminUser } = await prisma.$transaction(async (tx) => {
       const createdClinic = await tx.clinic.create({
@@ -270,6 +298,9 @@ router.post("/register-clinic", async (req, res) => {
           password: hashedPassword,
           role: "admin",
           clinicId: createdClinic.id,
+          emailVerified: false,
+          emailVerificationToken: verification.token,
+          emailVerificationExpiresAt: verification.expiresAt,
         },
         include: { clinic: true },
       });
@@ -277,18 +308,25 @@ router.post("/register-clinic", async (req, res) => {
       return { clinic: createdClinic, adminUser: createdAdmin };
     });
 
-    const accessToken = generateAccessToken(adminUser);
-    const refreshToken = generateRefreshToken(adminUser);
-
-    await prisma.user.update({
-      where: { id: adminUser.id },
-      data: { refreshToken },
-    });
+    try {
+      await sendVerificationEmail({
+        email: adminUser.email,
+        name: adminUser.name,
+        token: verification.token,
+      });
+    } catch (emailError) {
+      console.error("Clinic registration verification email error:", emailError);
+      await prisma.clinic.delete({
+        where: { id: clinic.id },
+      });
+      return res.status(500).json({
+        message: getVerificationErrorMessage(emailError),
+      });
+    }
 
     res.status(201).json({
-      message: "Clinic registered successfully",
-      accessToken,
-      refreshToken,
+      message:
+        "Clinic registered successfully. A welcome email has been sent to confirm the admin account.",
       clinic: serializeClinic(clinic),
       user: serializeUser(adminUser),
     });
@@ -320,6 +358,7 @@ router.post("/signup", protect, authorizeRoles("admin"), async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password.trim(), 10);
+    const verification = createEmailVerification();
     const newUser = await prisma.user.create({
       data: {
         name: name.trim(),
@@ -327,13 +366,33 @@ router.post("/signup", protect, authorizeRoles("admin"), async (req, res) => {
         password: hashedPassword,
         role: role || "nurse",
         clinicId: req.user.clinicId,
+        emailVerified: false,
+        emailVerificationToken: verification.token,
+        emailVerificationExpiresAt: verification.expiresAt,
       },
       include: { clinic: true },
     });
 
+    try {
+      await sendVerificationEmail({
+        email: newUser.email,
+        name: newUser.name,
+        token: verification.token,
+      });
+    } catch (emailError) {
+      console.error("Staff verification email error:", emailError);
+      await prisma.user.delete({
+        where: { id: newUser.id },
+      });
+      return res.status(500).json({
+        message: getVerificationErrorMessage(emailError),
+      });
+    }
+
     res.status(201).json({
       user: serializeUser(newUser),
-      message: "Staff account created successfully",
+      message:
+        "Staff account created successfully. A welcome email was sent so the user can confirm their address and activate the account.",
     });
   } catch (error) {
     console.error("Signup error:", error);
@@ -446,6 +505,12 @@ router.post("/login", async (req, res) => {
     if (!user.isActive) {
       return res.status(403).json({ message: "Your staff account has been deactivated" });
     }
+    if (!user.emailVerified) {
+      return res.status(403).json({
+        message:
+          "Please confirm your email address to activate your account before signing in.",
+      });
+    }
     if (!user.clinic?.isActive) {
       return res.status(403).json({
         message: "Your clinic account has been deactivated. Contact support for reactivation.",
@@ -471,6 +536,109 @@ router.post("/login", async (req, res) => {
   } catch (error) {
     console.error("Login error:", error);
     res.status(500).json({ message: "Server error" });
+  }
+});
+
+router.get("/verify-email", async (req, res) => {
+  try {
+    const token = String(req.query?.token || "").trim();
+
+    if (!token) {
+      return res.status(400).json({ message: "Verification token is required" });
+    }
+
+    const user = await prisma.user.findFirst({
+      where: { emailVerificationToken: token },
+      include: { clinic: true },
+    });
+
+    if (!user) {
+      return res.status(400).json({
+        message:
+          "This verification link is invalid, expired, or has already been used. Please sign in or request a new verification email.",
+      });
+    }
+
+    if (user.emailVerified) {
+      return res.json({
+        message: "Email address already confirmed. You can sign in now.",
+        user: serializeUser(user),
+      });
+    }
+
+    if (
+      user.emailVerificationExpiresAt &&
+      user.emailVerificationExpiresAt.getTime() < Date.now()
+    ) {
+      return res.status(400).json({
+        message:
+          "This verification link has expired. Please go back and request a new verification email.",
+      });
+    }
+
+    const verifiedUser = await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        emailVerified: true,
+        emailVerificationToken: null,
+        emailVerificationExpiresAt: null,
+      },
+      include: { clinic: true },
+    });
+
+    res.json({
+      message: "Email confirmed successfully. Your account is now active.",
+      user: serializeUser(verifiedUser),
+    });
+  } catch (error) {
+    console.error("Verify email error:", error);
+    res.status(500).json({ message: "Failed to verify email" });
+  }
+});
+
+router.post("/resend-verification", async (req, res) => {
+  try {
+    const email = String(req.body?.email || "")
+      .toLowerCase()
+      .trim();
+
+    if (!email) {
+      return res.status(400).json({ message: "Email is required" });
+    }
+
+    const user = await getUserByEmail(email);
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (!user.isActive) {
+      return res.status(403).json({ message: "Your staff account has been deactivated" });
+    }
+
+    if (!user.clinic?.isActive) {
+      return res.status(403).json({
+        message: "Your clinic account has been deactivated. Contact support for reactivation.",
+      });
+    }
+
+    if (user.emailVerified) {
+      return res.status(400).json({
+        message: "This email address is already confirmed. You can sign in now.",
+      });
+    }
+
+    await refreshVerificationForUser(user);
+
+    res.json({
+      message:
+        "A new verification email has been sent. Please check your inbox and spam folder.",
+    });
+  } catch (error) {
+    console.error("Resend verification error:", error);
+    res.status(500).json({
+      message: getVerificationErrorMessage(error),
+    });
   }
 });
 
