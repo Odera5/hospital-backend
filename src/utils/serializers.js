@@ -6,6 +6,10 @@ export const serializeRecord = (record) => ({
   ...record,
   attachments: Array.isArray(record.attachments) ? record.attachments : [],
   teeth: Array.isArray(record.teeth) ? record.teeth : [],
+  consentObtained: Boolean(record.consentObtained),
+  consentDate: record.consentDate || null,
+  consentTakenBy: record.consentTakenBy || "",
+  consentNotes: record.consentNotes || "",
 });
 
 export const serializeInvoice = (invoice) => ({

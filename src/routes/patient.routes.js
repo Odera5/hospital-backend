@@ -48,6 +48,33 @@ const normalizeTeeth = (value) => {
 const normalizeAttachments = (attachments) =>
   Array.isArray(attachments) ? attachments : [];
 
+const normalizeBoolean = (value) => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    return ["true", "1", "yes", "on"].includes(value.trim().toLowerCase());
+  }
+  return Boolean(value);
+};
+
+const normalizeConsentPayload = (payload = {}) => {
+  const consentObtained = normalizeBoolean(payload.consentObtained);
+  const consentTakenBy = normalizeText(payload.consentTakenBy);
+  const consentNotes = normalizeText(payload.consentNotes);
+  const rawConsentDate = normalizeText(payload.consentDate);
+  const consentDate =
+    consentObtained && rawConsentDate ? new Date(rawConsentDate) : null;
+
+  return {
+    consentObtained,
+    consentTakenBy: consentObtained ? consentTakenBy : "",
+    consentNotes: consentObtained ? consentNotes : "",
+    consentDate:
+      consentObtained && consentDate && !Number.isNaN(consentDate.getTime())
+        ? consentDate
+        : null,
+  };
+};
+
 const buildAttachmentUrl = (patientId, fileName) =>
   `/api/patients/${patientId}/records/attachments/${encodeURIComponent(fileName)}`;
 
@@ -67,6 +94,56 @@ const buildExaminationSummary = ({
   ].filter(([, value]) => value);
 
   return sections.map(([label, value]) => `${label}: ${value}`).join("\n");
+};
+
+const formatCardNumber = (sequence) => `PAT-${String(sequence).padStart(6, "0")}`;
+
+const isPatientCardSequenceConflict = (error) =>
+  error instanceof Prisma.PrismaClientKnownRequestError &&
+  error.code === "P2002" &&
+  Array.isArray(error.meta?.target) &&
+  error.meta.target.includes("clinicId") &&
+  error.meta.target.includes("cardNumberSequence");
+
+const createPatientWithGeneratedCardNumber = async ({
+  clinicId,
+  patientData,
+}) => {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const latestPatient = await tx.patient.findFirst({
+          where: { clinicId },
+          orderBy: [
+            { cardNumberSequence: "desc" },
+            { createdAt: "desc" },
+          ],
+          select: { cardNumberSequence: true },
+        });
+
+        const nextSequence = (latestPatient?.cardNumberSequence || 0) + 1;
+
+        return tx.patient.create({
+          data: {
+            clinicId,
+            cardNumberSequence: nextSequence,
+            ...toEncryptedPatientData({
+              ...patientData,
+              cardNumber: formatCardNumber(nextSequence),
+            }),
+          },
+        });
+      });
+    } catch (error) {
+      if (isPatientCardSequenceConflict(error) && attempt < 4) {
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  throw new Error("Failed to generate a unique patient card number");
 };
 
 const getPatientOr404 = async (id, clinicId) => {
@@ -137,7 +214,6 @@ router.post(
   async (req, res) => {
     try {
       const name = normalizeText(req.body?.name);
-      const cardNumber = normalizeText(req.body?.cardNumber);
       const age = normalizeText(req.body?.age);
       const gender = normalizeText(req.body?.gender) || "other";
       const phone = normalizeText(req.body?.phone);
@@ -148,18 +224,15 @@ router.post(
         return res.status(400).json({ message: "Name and age are required" });
       }
 
-      const patient = await prisma.patient.create({
-        data: {
-          clinicId: req.user.clinicId,
-          ...toEncryptedPatientData({
-            name,
-            cardNumber,
-            age,
-            gender,
-            phone,
-            address,
-            email,
-          }),
+      const patient = await createPatientWithGeneratedCardNumber({
+        clinicId: req.user.clinicId,
+        patientData: {
+          name,
+          age,
+          gender,
+          phone,
+          address,
+          email,
         },
       });
 
@@ -345,6 +418,10 @@ router.post(
         medication,
         dentition,
         teeth,
+        consentObtained,
+        consentDate,
+        consentTakenBy,
+        consentNotes,
       } = req.body;
 
       if (
@@ -356,6 +433,13 @@ router.post(
           message: "Complaint, diagnosis, and treatment plan are required",
         });
       }
+
+      const normalizedConsent = normalizeConsentPayload({
+        consentObtained,
+        consentDate,
+        consentTakenBy,
+        consentNotes,
+      });
 
       const attachments = normalizeAttachments(
         req.files?.map((file) => ({
@@ -385,6 +469,7 @@ router.post(
           occlusion: occlusion || "",
           investigation: investigation || "",
           medication: medication || "",
+          ...normalizedConsent,
           dentition: dentition === "child" ? "child" : "adult",
           teeth: normalizeTeeth(teeth),
           attachments,
@@ -399,6 +484,7 @@ router.post(
         metadata: {
           dentition: record.dentition,
           attachmentCount: attachments.length,
+          consentObtained: record.consentObtained,
         },
       });
 
@@ -447,7 +533,18 @@ router.put(
         dentition,
         teeth,
         removedAttachments,
+        consentObtained,
+        consentDate,
+        consentTakenBy,
+        consentNotes,
       } = req.body;
+
+      const normalizedConsent = normalizeConsentPayload({
+        consentObtained,
+        consentDate,
+        consentTakenBy,
+        consentNotes,
+      });
 
       const existingAttachments = normalizeAttachments(record.attachments);
       const removedNames = removedAttachments
@@ -493,6 +590,7 @@ router.put(
           occlusion: occlusion || "",
           investigation: investigation || "",
           medication: medication || "",
+          ...normalizedConsent,
           dentition: dentition === "child" ? "child" : "adult",
           teeth: normalizeTeeth(teeth),
           attachments: [...retainedAttachments, ...newAttachments],
@@ -508,6 +606,7 @@ router.put(
           dentition: updatedRecord.dentition,
           removedAttachments: removedNames.length,
           addedAttachments: newAttachments.length,
+          consentObtained: updatedRecord.consentObtained,
         },
       });
 

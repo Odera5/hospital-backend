@@ -31,6 +31,7 @@ model User {
 model Patient {
   id             String        @id @default(cuid())
   clinicId       String
+  cardNumberSequence Int?
   name           String
   cardNumber     String        @default("")
   age            String
@@ -50,6 +51,7 @@ model Patient {
 
   @@index([clinicId, createdAt])
   @@index([clinicId, isDeleted])
+  @@unique([clinicId, cardNumberSequence])
 }
 
 model Clinic {
@@ -82,6 +84,10 @@ model Record {
   diagnosis             String   @default("")
   treatmentPlan         String   @default("")
   medication            String   @default("")
+  consentObtained       Boolean  @default(false)
+  consentDate           DateTime?
+  consentTakenBy        String   @default("")
+  consentNotes          String   @default("")
   dentition             String   @default("adult")
   teeth                 Json     @default("[]")
   attachments           Json     @default("[]")

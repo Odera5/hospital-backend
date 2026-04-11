@@ -1,0 +1,5 @@
+ALTER TABLE "Record"
+ADD COLUMN "consentObtained" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN "consentDate" TIMESTAMP(3),
+ADD COLUMN "consentTakenBy" TEXT NOT NULL DEFAULT '',
+ADD COLUMN "consentNotes" TEXT NOT NULL DEFAULT '';
