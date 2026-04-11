@@ -111,28 +111,22 @@ const createPatientWithGeneratedCardNumber = async ({
 }) => {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
-      return await prisma.$transaction(async (tx) => {
-        const latestPatient = await tx.patient.findFirst({
-          where: { clinicId },
-          orderBy: [
-            { cardNumberSequence: "desc" },
-            { createdAt: "desc" },
-          ],
-          select: { cardNumberSequence: true },
-        });
+      const aggregate = await prisma.patient.aggregate({
+        where: { clinicId },
+        _max: { cardNumberSequence: true },
+      });
 
-        const nextSequence = (latestPatient?.cardNumberSequence || 0) + 1;
+      const nextSequence = (aggregate._max.cardNumberSequence || 0) + 1;
 
-        return tx.patient.create({
-          data: {
-            clinicId,
-            cardNumberSequence: nextSequence,
-            ...toEncryptedPatientData({
-              ...patientData,
-              cardNumber: formatCardNumber(nextSequence),
-            }),
-          },
-        });
+      return await prisma.patient.create({
+        data: {
+          clinicId,
+          cardNumberSequence: nextSequence,
+          ...toEncryptedPatientData({
+            ...patientData,
+            cardNumber: formatCardNumber(nextSequence),
+          }),
+        },
       });
     } catch (error) {
       if (isPatientCardSequenceConflict(error) && attempt < 4) {
