@@ -284,7 +284,8 @@ router.put(
         data: {
           ...toEncryptedPatientData({
             name: updates.name,
-            cardNumber: updates.cardNumber,
+            // Patient card numbers remain system-controlled after registration.
+            cardNumber: existingPatient.cardNumber,
             age: updates.age,
             gender: updates.gender,
             phone: updates.phone,
@@ -391,7 +392,7 @@ router.delete(
 router.post(
   "/:id/records",
   protect,
-  authorizeRoles("admin", "doctor", "nurse"),
+  authorizeRoles("admin", "doctor"),
   upload.array("attachments"),
   async (req, res) => {
     try {
@@ -495,7 +496,7 @@ router.post(
 router.put(
   "/:id/records/:recordId",
   protect,
-  authorizeRoles("admin", "doctor", "nurse"),
+  authorizeRoles("admin", "doctor"),
   upload.array("attachments"),
   async (req, res) => {
     try {

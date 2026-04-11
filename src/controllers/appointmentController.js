@@ -2,6 +2,23 @@ import { prisma } from "../lib/prisma.js";
 import { serializeAppointment } from "../utils/serializers.js";
 import { toDecryptedPatient } from "../utils/patientCrypto.js";
 
+const WORKING_HOURS = [
+  "09:00",
+  "09:30",
+  "10:00",
+  "10:30",
+  "11:00",
+  "11:30",
+  "14:00",
+  "14:30",
+  "15:00",
+  "15:30",
+  "16:00",
+  "16:30",
+];
+
+const SLOT_MINUTES = 30;
+
 const buildDateFilter = (startDate, endDate) => {
   if (!startDate && !endDate) return undefined;
 
@@ -18,6 +35,69 @@ const buildDateFilter = (startDate, endDate) => {
   }
   return filter;
 };
+
+const parseTimeSlotToMinutes = (value) => {
+  if (typeof value !== "string" || !value.includes(":")) return null;
+
+  const [hours, minutes] = value.split(":").map(Number);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+
+  return hours * 60 + minutes;
+};
+
+const rangesOverlap = (startA, endA, startB, endB) =>
+  startA < endB && startB < endA;
+
+const getAppointmentRange = (timeSlot, duration = SLOT_MINUTES) => {
+  const start = parseTimeSlotToMinutes(timeSlot);
+  if (start === null) return null;
+
+  const safeDuration = Math.max(SLOT_MINUTES, Number(duration) || SLOT_MINUTES);
+  return {
+    start,
+    end: start + safeDuration,
+  };
+};
+
+const isSlotAvailableForDuration = (slot, duration, appointments, excludedId = null) => {
+  const candidateRange = getAppointmentRange(slot, duration);
+  if (!candidateRange) return false;
+
+  const workingDayStart = parseTimeSlotToMinutes(WORKING_HOURS[0]);
+  const workingDayEnd =
+    parseTimeSlotToMinutes(WORKING_HOURS[WORKING_HOURS.length - 1]) + SLOT_MINUTES;
+
+  if (
+    candidateRange.start < workingDayStart ||
+    candidateRange.end > workingDayEnd
+  ) {
+    return false;
+  }
+
+  return !appointments.some((appointment) => {
+    if (excludedId && appointment.id === excludedId) return false;
+    if (appointment.status === "cancelled") return false;
+
+    const existingRange = getAppointmentRange(
+      appointment.timeSlot,
+      appointment.duration,
+    );
+
+    if (!existingRange) return false;
+
+    return rangesOverlap(
+      candidateRange.start,
+      candidateRange.end,
+      existingRange.start,
+      existingRange.end,
+    );
+  });
+};
+
+const listAvailableSlots = (appointments, duration, excludedId = null) =>
+  WORKING_HOURS.filter((slot) =>
+    isSlotAvailableForDuration(slot, duration, appointments, excludedId),
+  );
 
 export const getAllAppointments = async (req, res) => {
   try {
@@ -167,19 +247,30 @@ export const createAppointment = async (req, res) => {
     const endOfDay = new Date(appointmentDay);
     endOfDay.setHours(23, 59, 59, 999);
 
-    const existing = await prisma.appointment.findFirst({
+    const dayAppointments = await prisma.appointment.findMany({
       where: {
         patient: { clinicId: req.user.clinicId },
         appointmentDate: {
           gte: startOfDay,
           lte: endOfDay,
         },
-        timeSlot,
         status: { not: "cancelled" },
+      },
+      select: {
+        id: true,
+        timeSlot: true,
+        duration: true,
+        status: true,
       },
     });
 
-    if (existing) {
+    if (
+      !isSlotAvailableForDuration(
+        timeSlot,
+        Number(duration) || SLOT_MINUTES,
+        dayAppointments,
+      )
+    ) {
       return res.status(400).json({ message: "Time slot already booked" });
     }
 
@@ -240,6 +331,12 @@ export const updateAppointment = async (req, res) => {
       return res.status(404).json({ message: "Appointment not found" });
     }
 
+    if (req.user.role === "nurse" && status === "completed") {
+      return res.status(403).json({
+        message: "Front desk cannot mark appointments as completed",
+      });
+    }
+
     if (dentistId) {
       const dentist = await prisma.user.findFirst({
         where: {
@@ -294,20 +391,31 @@ export const updateAppointment = async (req, res) => {
       const endOfDay = new Date(day);
       endOfDay.setHours(23, 59, 59, 999);
 
-      const existing = await prisma.appointment.findFirst({
+      const dayAppointments = await prisma.appointment.findMany({
         where: {
-          id: { not: appointment.id },
           patient: { clinicId: req.user.clinicId },
           appointmentDate: {
             gte: startOfDay,
             lte: endOfDay,
           },
-          timeSlot,
           status: { not: "cancelled" },
+        },
+        select: {
+          id: true,
+          timeSlot: true,
+          duration: true,
+          status: true,
         },
       });
 
-      if (existing) {
+      if (
+        !isSlotAvailableForDuration(
+          timeSlot,
+          Number(duration) || appointment.duration || SLOT_MINUTES,
+          dayAppointments,
+          appointment.id,
+        )
+      ) {
         return res.status(400).json({ message: "Time slot already booked" });
       }
     }
@@ -377,26 +485,11 @@ export const deleteAppointment = async (req, res) => {
 
 export const getAvailableSlots = async (req, res) => {
   try {
-    const { date } = req.query;
+    const { date, duration, appointmentId } = req.query;
 
     if (!date) {
       return res.status(400).json({ message: "Date required" });
     }
-
-    const workingHours = [
-      "09:00",
-      "09:30",
-      "10:00",
-      "10:30",
-      "11:00",
-      "11:30",
-      "14:00",
-      "14:30",
-      "15:00",
-      "15:30",
-      "16:00",
-      "16:30",
-    ];
 
     const day = new Date(date);
     const startOfDay = new Date(day);
@@ -413,12 +506,18 @@ export const getAvailableSlots = async (req, res) => {
         },
         status: { not: "cancelled" },
       },
-      select: { timeSlot: true },
+      select: {
+        id: true,
+        timeSlot: true,
+        duration: true,
+        status: true,
+      },
     });
 
-    const bookedSlots = booked.map((appointment) => appointment.timeSlot);
-    const availableSlots = workingHours.filter(
-      (slot) => !bookedSlots.includes(slot),
+    const availableSlots = listAvailableSlots(
+      booked,
+      Number(duration) || SLOT_MINUTES,
+      appointmentId || null,
     );
 
     res.json({ availableSlots, date });

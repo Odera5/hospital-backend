@@ -169,6 +169,18 @@ export const updateWaitingEntry = async (req, res) => {
 
     const updateData = {};
     if (status && status !== item.status) {
+      if (
+        req.user.role === "nurse" &&
+        !(
+          item.status === "waiting" &&
+          status === "called"
+        )
+      ) {
+        return res.status(403).json({
+          message: "Front desk can only move patients from Waiting to Called",
+        });
+      }
+
       updateData.status = status;
       const field = STATUS_TIMES[status];
       if (field) updateData[field] = new Date();
