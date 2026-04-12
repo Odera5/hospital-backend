@@ -311,6 +311,8 @@ router.post("/register-clinic", async (req, res) => {
       return { clinic: createdClinic, adminUser: createdAdmin };
     });
 
+    let emailWarning = "";
+
     try {
       await sendVerificationEmail({
         email: adminUser.email,
@@ -319,19 +321,15 @@ router.post("/register-clinic", async (req, res) => {
       });
     } catch (emailError) {
       console.error("Clinic registration verification email error:", emailError);
-      await prisma.clinic.delete({
-        where: { id: clinic.id },
-      });
-      return res.status(500).json({
-        message: getVerificationErrorMessage(emailError),
-      });
+      emailWarning =
+        " Clinic account was created, but the verification email could not be sent right now. Please use the resend verification option from the login page after email delivery is configured.";
     }
 
     res.status(201).json({
-      message:
-        "Clinic registered successfully. A welcome email has been sent to confirm the admin account.",
+      message: `Clinic registered successfully.${emailWarning || " A welcome email has been sent to confirm the admin account."}`,
       clinic: serializeClinic(clinic),
       user: serializeUser(adminUser),
+      emailSent: !emailWarning,
     });
   } catch (error) {
     console.error("Clinic registration error:", error);

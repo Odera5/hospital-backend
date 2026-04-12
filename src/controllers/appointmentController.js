@@ -120,6 +120,7 @@ export const getAllAppointments = async (req, res) => {
     const where = {
       patient: {
         clinicId: req.user.clinicId,
+        isDeleted: false,
       },
       ...(patientId ? { patientId } : {}),
       ...(dentistId ? { dentistId, dentist: { clinicId: req.user.clinicId } } : {}),
@@ -170,7 +171,7 @@ export const getAppointment = async (req, res) => {
     const appointment = await prisma.appointment.findFirst({
       where: {
         id: req.params.id,
-        patient: { clinicId: req.user.clinicId },
+        patient: { clinicId: req.user.clinicId, isDeleted: false },
       },
       include: {
         patient: true,
@@ -249,7 +250,7 @@ export const createAppointment = async (req, res) => {
 
     const dayAppointments = await prisma.appointment.findMany({
       where: {
-        patient: { clinicId: req.user.clinicId },
+        patient: { clinicId: req.user.clinicId, isDeleted: false },
         appointmentDate: {
           gte: startOfDay,
           lte: endOfDay,
@@ -393,7 +394,7 @@ export const updateAppointment = async (req, res) => {
 
       const dayAppointments = await prisma.appointment.findMany({
         where: {
-          patient: { clinicId: req.user.clinicId },
+          patient: { clinicId: req.user.clinicId, isDeleted: false },
           appointmentDate: {
             gte: startOfDay,
             lte: endOfDay,
@@ -499,7 +500,7 @@ export const getAvailableSlots = async (req, res) => {
 
     const booked = await prisma.appointment.findMany({
       where: {
-        patient: { clinicId: req.user.clinicId },
+        patient: { clinicId: req.user.clinicId, isDeleted: false },
         appointmentDate: {
           gte: startOfDay,
           lte: endOfDay,

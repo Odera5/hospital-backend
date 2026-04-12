@@ -32,7 +32,7 @@ export const getWaitingList = async (req, res) => {
 
     const items = await prisma.waitingRoom.findMany({
       where: {
-        patient: { clinicId: req.user.clinicId },
+        patient: { clinicId: req.user.clinicId, isDeleted: false },
         ...(status ? { status } : {}),
         ...(search
           ? {
@@ -57,7 +57,7 @@ export const getWaitingList = async (req, res) => {
 export const getWaitingSummary = async (req, res) => {
   try {
     const baseWhere = {
-      patient: { clinicId: req.user.clinicId },
+      patient: { clinicId: req.user.clinicId, isDeleted: false },
     };
 
     const [waiting, called, inConsultation, completed, total] = await Promise.all([
