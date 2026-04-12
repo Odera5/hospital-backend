@@ -251,6 +251,7 @@ router.post("/register-clinic", async (req, res) => {
       !password?.trim()
     ) {
       return res.status(400).json({
+        code: "MISSING_REQUIRED_FIELDS",
         message:
           "Clinic name, clinic email, admin name, admin email, and password are required",
       });
@@ -266,12 +267,14 @@ router.post("/register-clinic", async (req, res) => {
 
     if (existingClinic) {
       return res.status(400).json({
+        code: "CLINIC_EMAIL_EXISTS",
         message: "A clinic with this email has already been registered",
       });
     }
 
     if (existingAdmin) {
       return res.status(400).json({
+        code: "ADMIN_EMAIL_EXISTS",
         message: "A user with this admin email already exists",
       });
     }
