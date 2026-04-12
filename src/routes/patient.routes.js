@@ -279,20 +279,22 @@ router.put(
         ...req.body,
       };
 
+      const encryptedData = toEncryptedPatientData({
+        name: updates.name,
+        age: updates.age,
+        gender: updates.gender,
+        phone: updates.phone,
+        address: updates.address,
+        email: updates.email,
+      });
+
+      // Patient card numbers remain system-controlled after registration.
+      // Retain the already-encrypted cardNumber to prevent double-encryption.
+      encryptedData.cardNumber = existingPatient.cardNumber;
+
       const patient = await prisma.patient.update({
         where: { id: existingPatient.id },
-        data: {
-          ...toEncryptedPatientData({
-            name: updates.name,
-            // Patient card numbers remain system-controlled after registration.
-            cardNumber: existingPatient.cardNumber,
-            age: updates.age,
-            gender: updates.gender,
-            phone: updates.phone,
-            address: updates.address,
-            email: updates.email,
-          }),
-        },
+        data: encryptedData,
       });
 
       res.json(toDecryptedPatient(patient));
