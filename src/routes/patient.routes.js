@@ -263,6 +263,72 @@ router.post(
   },
 );
 
+router.post(
+  "/import",
+  protect,
+  authorizeRoles("admin", "doctor", "nurse"),
+  async (req, res) => {
+    try {
+      const { patients } = req.body;
+      
+      if (!Array.isArray(patients) || patients.length === 0) {
+        return res.status(400).json({ message: "No patients data provided" });
+      }
+
+      let aggregate = await prisma.patient.aggregate({
+        where: { clinicId: req.user.clinicId },
+        _max: { cardNumberSequence: true },
+      });
+      
+      let nextSequence = (aggregate._max.cardNumberSequence || 0) + 1;
+
+      const newPatients = patients.map((p) => {
+        const name = normalizeText(p.name);
+        if (!name) return null;
+
+        const age = normalizeText(p.age) || "0"; 
+        const gender = normalizeText(p.gender) || "other";
+        const phone = normalizeText(p.phone);
+        const address = normalizeText(p.address);
+        const email = normalizeText(p.email);
+
+        const currentSeq = nextSequence++;
+        
+        return {
+          clinicId: req.user.clinicId,
+          cardNumberSequence: currentSeq,
+          ...toEncryptedPatientData({
+            name,
+            age,
+            gender,
+            phone,
+            address,
+            email,
+            cardNumber: formatCardNumber(currentSeq),
+          })
+        };
+      }).filter(Boolean);
+
+      if (newPatients.length === 0) {
+        return res.status(400).json({ message: "No valid patient data found to import." });
+      }
+
+      const created = await prisma.patient.createMany({
+        data: newPatients,
+        skipDuplicates: true,
+      });
+
+      res.status(201).json({ 
+        message: "Patients imported successfully", 
+        count: created.count 
+      });
+    } catch (error) {
+      console.error("Import patients error:", error);
+      res.status(500).json({ message: "Failed to bulk import patients" });
+    }
+  }
+);
+
 router.put(
   "/:id",
   protect,
