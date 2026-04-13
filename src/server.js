@@ -8,8 +8,11 @@ import patientRoutes from "./routes/patient.routes.js";
 import appointmentRoutes from "./routes/appointment.routes.js";
 import waitingRoomRoutes from "./routes/waitingRoom.routes.js";
 import invoiceRoutes from "./routes/invoice.routes.js";
+import uploadRoutes from "./routes/upload.routes.js";
 import { apiLimiter } from "./middleware/rateLimit.js";
 import { logger } from "./middleware/logger.js";
+import path from "path";
+import { fileURLToPath } from "url";
 
 dotenv.config();
 
@@ -57,6 +60,11 @@ app.use(express.json());
 app.use(logger);
 app.use("/api", apiLimiter); // make sure apiLimiter calls next()
 // =========================
+// STATIC DIRECTORIES
+// =========================
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
+
+// =========================
 // ROUTES
 // =========================
 app.use("/api/auth", authRoutes);
@@ -64,6 +72,7 @@ app.use("/api/patients", patientRoutes);
 app.use("/api/appointments", appointmentRoutes);
 app.use("/api/waiting-room", waitingRoomRoutes);
 app.use("/api/invoices", invoiceRoutes);
+app.use("/api/upload", uploadRoutes);
 
 // =========================
 // 404 HANDLER

@@ -207,6 +207,20 @@ router.post(
   authorizeRoles("admin", "doctor", "nurse"),
   async (req, res) => {
     try {
+      const clinic = await prisma.clinic.findUnique({
+        where: { id: req.user.clinicId }
+      });
+      
+      if (clinic?.plan === "FREE") {
+        const patientCount = await prisma.patient.count({
+          where: { clinicId: req.user.clinicId, isDeleted: false }
+        });
+        
+        if (patientCount >= 100) {
+          return res.status(403).json({ message: "You have reached the Free Plan limit of 100 patients. Please upgrade to Pro to add more." });
+        }
+      }
+
       const name = normalizeText(req.body?.name);
       const age = normalizeText(req.body?.age);
       const gender = normalizeText(req.body?.gender) || "other";
@@ -273,6 +287,22 @@ router.post(
       
       if (!Array.isArray(patients) || patients.length === 0) {
         return res.status(400).json({ message: "No patients data provided" });
+      }
+
+      const clinic = await prisma.clinic.findUnique({
+        where: { id: req.user.clinicId }
+      });
+
+      if (clinic?.plan === "FREE") {
+        const patientCount = await prisma.patient.count({
+          where: { clinicId: req.user.clinicId, isDeleted: false }
+        });
+        
+        if (patientCount + patients.length > 100) {
+          return res.status(403).json({ 
+            message: `Importing these ${patients.length} records would exceed the Free Plan limit of 100 patients. Please upgrade to Pro.` 
+          });
+        }
       }
 
       let aggregate = await prisma.patient.aggregate({

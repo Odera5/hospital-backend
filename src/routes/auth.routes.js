@@ -50,6 +50,8 @@ const serializeClinic = (clinic) =>
         contactPerson: clinic.contactPerson,
         procedurePresetPrices: normalizeProcedurePresetPrices(clinic.procedurePresetPrices),
         isActive: Boolean(clinic.isActive),
+        plan: clinic.plan || "FREE",
+        subscriptionEnds: clinic.subscriptionEnds || null,
         createdAt: clinic.createdAt,
       }
     : null;
@@ -291,6 +293,8 @@ router.post("/register-clinic", async (req, res) => {
           city: clinicCity?.trim() || "",
           address: clinicAddress?.trim() || "",
           contactPerson: adminName.trim(),
+          plan: "PRO",
+          subscriptionEnds: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
         },
       });
 
@@ -516,6 +520,15 @@ router.post("/login", async (req, res) => {
       return res.status(403).json({
         message: "Your clinic account has been deactivated. Contact support for reactivation.",
       });
+    }
+
+    // Auto-Downgrade Check: If trial expired, drop to FREE
+    if (user.clinic.plan === "PRO" && user.clinic.subscriptionEnds && new Date(user.clinic.subscriptionEnds) < new Date()) {
+      await prisma.clinic.update({
+        where: { id: user.clinic.id },
+        data: { plan: "FREE" }
+      });
+      user.clinic.plan = "FREE";
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
