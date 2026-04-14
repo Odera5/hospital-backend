@@ -7,7 +7,7 @@
     "db:deploy": "prisma migrate deploy",
     "postinstall": "prisma generate",
     "start": "prisma migrate deploy && node src/server.js",
-    "dev": "nodemon src/server.js",
+    "dev": "nodemon --watch src --watch .env src/server.js",
     "migrate:mongo": "node src/scripts/migrateMongoToPostgres.js"
   },
   "dependencies": {
@@ -23,7 +23,9 @@
     "jsonwebtoken": "^9.0.3",
     "mongodb": "^6.17.0",
     "multer": "^2.0.2",
-    "nodemailer": "^7.0.13"
+    "node-cron": "^4.2.1",
+    "nodemailer": "^7.0.13",
+    "twilio": "^5.13.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.11",

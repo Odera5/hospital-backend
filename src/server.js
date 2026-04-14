@@ -9,10 +9,13 @@ import appointmentRoutes from "./routes/appointment.routes.js";
 import waitingRoomRoutes from "./routes/waitingRoom.routes.js";
 import invoiceRoutes from "./routes/invoice.routes.js";
 import uploadRoutes from "./routes/upload.routes.js";
+import analyticsRoutes from "./routes/analytics.routes.js";
+import intakeRoutes from "./routes/intake.routes.js";
 import { apiLimiter } from "./middleware/rateLimit.js";
 import { logger } from "./middleware/logger.js";
 import path from "path";
 import { fileURLToPath } from "url";
+import "./jobs/reminderJob.js";
 
 dotenv.config();
 
@@ -73,6 +76,8 @@ app.use("/api/appointments", appointmentRoutes);
 app.use("/api/waiting-room", waitingRoomRoutes);
 app.use("/api/invoices", invoiceRoutes);
 app.use("/api/upload", uploadRoutes);
+app.use("/api/analytics", analyticsRoutes);
+app.use("/api/intake", intakeRoutes);
 
 // =========================
 // 404 HANDLER

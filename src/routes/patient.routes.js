@@ -4,6 +4,7 @@ import path from "path";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { protect, authorizeRoles } from "../middleware/authorize.js";
+import { requireProOrEnterprise } from "../middleware/subscriptionGuard.js";
 import upload from "../middleware/upload.js";
 import { logAuditEvent } from "../services/auditLog.js";
 import {
@@ -281,28 +282,13 @@ router.post(
   "/import",
   protect,
   authorizeRoles("admin", "doctor", "nurse"),
+  requireProOrEnterprise,
   async (req, res) => {
     try {
       const { patients } = req.body;
       
       if (!Array.isArray(patients) || patients.length === 0) {
         return res.status(400).json({ message: "No patients data provided" });
-      }
-
-      const clinic = await prisma.clinic.findUnique({
-        where: { id: req.user.clinicId }
-      });
-
-      if (clinic?.plan === "FREE") {
-        const patientCount = await prisma.patient.count({
-          where: { clinicId: req.user.clinicId, isDeleted: false }
-        });
-        
-        if (patientCount + patients.length > 100) {
-          return res.status(403).json({ 
-            message: `Importing these ${patients.length} records would exceed the Free Plan limit of 100 patients. Please upgrade to Pro.` 
-          });
-        }
       }
 
       let aggregate = await prisma.patient.aggregate({

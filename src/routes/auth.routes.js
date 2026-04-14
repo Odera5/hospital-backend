@@ -51,6 +51,8 @@ const serializeClinic = (clinic) =>
         procedurePresetPrices: normalizeProcedurePresetPrices(clinic.procedurePresetPrices),
         isActive: Boolean(clinic.isActive),
         plan: clinic.plan || "FREE",
+        logoUrl: clinic.logoUrl || null,
+        brandColor: clinic.brandColor || null,
         subscriptionEnds: clinic.subscriptionEnds || null,
         createdAt: clinic.createdAt,
       }
@@ -148,6 +150,8 @@ router.put("/clinic-profile", protect, authorizeRoles("admin"), async (req, res)
     const clinicCity = req.body?.clinicCity?.trim() || "";
     const clinicAddress = req.body?.clinicAddress?.trim() || "";
     const contactPerson = req.body?.contactPerson?.trim() || "";
+    const logoUrl = req.body?.logoUrl?.trim() || null;
+    const brandColor = req.body?.brandColor?.trim() || null;
     const procedurePresetPrices = normalizeProcedurePresetPrices(
       req.body?.procedurePresetPrices,
     );
@@ -181,6 +185,8 @@ router.put("/clinic-profile", protect, authorizeRoles("admin"), async (req, res)
         city: clinicCity,
         address: clinicAddress,
         contactPerson,
+        logoUrl,
+        brandColor,
         procedurePresetPrices,
       },
     });

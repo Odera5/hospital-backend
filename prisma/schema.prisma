@@ -69,6 +69,8 @@ model Clinic {
   users          User[]
   patients       Patient[]
   plan           PlanType  @default(FREE)
+  logoUrl        String?
+  brandColor     String?
   stripeCustomerId String?
   subscriptionEnds DateTime?
 }
@@ -111,6 +113,7 @@ model Appointment {
   dentistId       String?
   notes           String   @default("")
   status          String   @default("scheduled")
+  reminderSent    Boolean  @default(false)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   patient         Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
