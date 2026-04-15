@@ -89,6 +89,9 @@ model Record {
   diagnosis             String   @default("")
   treatmentPlan         String   @default("")
   medication            String   @default("")
+  allergies             String   @default("")
+  comorbidities         String   @default("")
+  currentMedication     String   @default("")
   consentObtained       Boolean  @default(false)
   consentDate           DateTime?
   consentTakenBy        String   @default("")
