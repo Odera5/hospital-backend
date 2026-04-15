@@ -14,8 +14,6 @@ import intakeRoutes from "./routes/intake.routes.js";
 import { apiLimiter } from "./middleware/rateLimit.js";
 import { logger } from "./middleware/logger.js";
 import path from "path";
-import { fileURLToPath } from "url";
-import "./jobs/reminderJob.js";
 
 dotenv.config();
 
