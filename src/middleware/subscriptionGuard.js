@@ -14,14 +14,31 @@ export const requireProOrEnterprise = async (req, res, next) => {
 
     const clinic = await prisma.clinic.findUnique({
       where: { id: req.user.clinicId },
-      select: { id: true, plan: true, subscriptionEnds: true }
+      select: {
+        id: true,
+        plan: true,
+        subscriptionEnds: true,
+        paystackSubscriptionStatus: true,
+      }
     });
 
     if (!clinic) {
       return res.status(404).json({ message: "Clinic not found." });
     }
 
-    if (clinic.plan === "PRO" && clinic.subscriptionEnds && new Date(clinic.subscriptionEnds) < new Date()) {
+    const paystackSubscriptionStatus = String(
+      clinic.paystackSubscriptionStatus || "",
+    ).toLowerCase();
+    const hasActivePaystackSubscription = ["active", "attention"].includes(
+      paystackSubscriptionStatus,
+    );
+
+    if (
+      clinic.plan === "PRO" &&
+      clinic.subscriptionEnds &&
+      new Date(clinic.subscriptionEnds) < new Date() &&
+      !hasActivePaystackSubscription
+    ) {
       await prisma.clinic.update({
         where: { id: clinic.id },
         data: { plan: "FREE" }

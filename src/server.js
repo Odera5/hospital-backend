@@ -11,8 +11,10 @@ import invoiceRoutes from "./routes/invoice.routes.js";
 import uploadRoutes from "./routes/upload.routes.js";
 import analyticsRoutes from "./routes/analytics.routes.js";
 import intakeRoutes from "./routes/intake.routes.js";
+import billingRoutes from "./routes/billing.routes.js";
 import { apiLimiter } from "./middleware/rateLimit.js";
 import { logger } from "./middleware/logger.js";
+import { handlePaystackWebhook } from "./controllers/billingController.js";
 import path from "path";
 
 dotenv.config();
@@ -57,13 +59,22 @@ app.use(
   })
 );
 
+app.post(
+  "/api/billing/paystack/webhook",
+  express.raw({ type: "application/json" }),
+  handlePaystackWebhook,
+);
+
 app.use(express.json());
 app.use(logger);
 app.use("/api", apiLimiter); // make sure apiLimiter calls next()
 // =========================
 // STATIC DIRECTORIES
 // =========================
-app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
+app.use(
+  "/uploads",
+  express.static(path.join(process.cwd(), "uploads", "public")),
+);
 
 // =========================
 // ROUTES
@@ -76,6 +87,7 @@ app.use("/api/invoices", invoiceRoutes);
 app.use("/api/upload", uploadRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/intake", intakeRoutes);
+app.use("/api/billing", billingRoutes);
 
 // =========================
 // 404 HANDLER

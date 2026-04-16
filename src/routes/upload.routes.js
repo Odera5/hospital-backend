@@ -7,8 +7,8 @@ import { requireProOrEnterprise } from "../middleware/subscriptionGuard.js";
 
 const router = express.Router();
 
-// Ensure uploads directory exists
-const uploadDir = path.join(process.cwd(), "uploads");
+// Keep public assets isolated from protected patient attachments.
+const uploadDir = path.join(process.cwd(), "uploads", "public", "branding");
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
@@ -65,8 +65,7 @@ router.post("/", verifyToken, requireProOrEnterprise, upload.single("file"), (re
       return res.status(400).json({ message: "No file uploaded." });
     }
 
-    // The frontend will access this via /uploads/<filename>
-    const fileUrl = `/uploads/${req.file.filename}`;
+    const fileUrl = `/uploads/branding/${req.file.filename}`;
     
     res.status(200).json({
       message: "File uploaded successfully",

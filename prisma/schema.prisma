@@ -72,6 +72,14 @@ model Clinic {
   logoUrl        String?
   brandColor     String?
   stripeCustomerId String?
+  paystackCustomerCode String?
+  paystackPlanCode String?
+  paystackSubscriptionCode String?
+  paystackSubscriptionStatus String?
+  paystackSubscriptionEmailToken String?
+  paystackAuthorizationCode String?
+  paystackLastReference String?
+  paystackNextPaymentDate DateTime?
   subscriptionEnds DateTime?
 }
 

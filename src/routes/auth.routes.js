@@ -12,6 +12,7 @@ import {
 
 const router = express.Router();
 const STAFF_ROLES = ["admin", "doctor", "nurse"];
+const ACTIVE_PAYSTACK_SUBSCRIPTION_STATUSES = ["active", "attention"];
 const DEFAULT_PROCEDURE_PRESETS = [
   { description: "Consultation", category: "service", unitPrice: 5000 },
   { description: "Scaling and Polishing", category: "procedure", unitPrice: 15000 },
@@ -54,6 +55,11 @@ const serializeClinic = (clinic) =>
         logoUrl: clinic.logoUrl || null,
         brandColor: clinic.brandColor || null,
         subscriptionEnds: clinic.subscriptionEnds || null,
+        paystackCustomerCode: clinic.paystackCustomerCode || null,
+        paystackPlanCode: clinic.paystackPlanCode || null,
+        paystackSubscriptionCode: clinic.paystackSubscriptionCode || null,
+        paystackSubscriptionStatus: clinic.paystackSubscriptionStatus || null,
+        paystackLastReference: clinic.paystackLastReference || null,
         createdAt: clinic.createdAt,
       }
     : null;
@@ -101,6 +107,19 @@ const refreshVerificationForUser = async (user) => {
   });
 
   return updatedUser;
+};
+
+const shouldAutoDowngradeClinic = (clinic) => {
+  const hasActivePaystackSubscription = ACTIVE_PAYSTACK_SUBSCRIPTION_STATUSES.includes(
+    String(clinic?.paystackSubscriptionStatus || "").toLowerCase(),
+  );
+
+  return Boolean(
+    clinic?.plan === "PRO" &&
+      clinic?.subscriptionEnds &&
+      new Date(clinic.subscriptionEnds) < new Date() &&
+      !hasActivePaystackSubscription,
+  );
 };
 
 const ensureAnotherActiveAdminExists = async (userId, clinicId) => {
@@ -529,7 +548,7 @@ router.post("/login", async (req, res) => {
     }
 
     // Auto-Downgrade Check: If trial expired, drop to FREE
-    if (user.clinic.plan === "PRO" && user.clinic.subscriptionEnds && new Date(user.clinic.subscriptionEnds) < new Date()) {
+    if (shouldAutoDowngradeClinic(user.clinic)) {
       await prisma.clinic.update({
         where: { id: user.clinic.id },
         data: { plan: "FREE" }

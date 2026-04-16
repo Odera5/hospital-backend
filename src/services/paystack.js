@@ -1,0 +1,401 @@
+import crypto from "crypto";
+import { prisma } from "../lib/prisma.js";
+
+const PAYSTACK_API_BASE_URL = "https://api.paystack.co";
+const PRO_PLAN_NAME = "PrimuxCare Pro Monthly";
+const PRO_PLAN_DESCRIPTION =
+  "PrimuxCare Pro monthly subscription for clinics in Nigeria";
+const MONTHLY_INTERVAL = "monthly";
+const DEFAULT_PRO_AMOUNT_KOBO = 1200000;
+
+const resolveBaseUrl = () =>
+  process.env.APP_BASE_URL?.trim() ||
+  process.env.FRONTEND_URL?.trim() ||
+  process.env.CORS_ORIGIN?.split(",")[0]?.trim() ||
+  "http://localhost:5173";
+
+const requirePaystackSecretKey = () => {
+  const key = process.env.PAYSTACK_SECRET_KEY?.trim();
+
+  if (!key) {
+    const error = new Error(
+      "Paystack is not configured. Set PAYSTACK_SECRET_KEY before starting billing.",
+    );
+    error.statusCode = 500;
+    throw error;
+  }
+
+  return key;
+};
+
+const getProPlanAmountKobo = () => {
+  const configuredAmount = Number(process.env.PAYSTACK_PRO_PLAN_AMOUNT_KOBO);
+  return Number.isFinite(configuredAmount) && configuredAmount > 0
+    ? Math.round(configuredAmount)
+    : DEFAULT_PRO_AMOUNT_KOBO;
+};
+
+const getPaystackHeaders = () => ({
+  Authorization: `Bearer ${requirePaystackSecretKey()}`,
+  "Content-Type": "application/json",
+});
+
+const callPaystack = async (path, options = {}) => {
+  const response = await fetch(`${PAYSTACK_API_BASE_URL}${path}`, {
+    ...options,
+    headers: {
+      ...getPaystackHeaders(),
+      ...(options.headers || {}),
+    },
+  });
+
+  const payload = await response.json().catch(() => null);
+
+  if (!response.ok || !payload?.status) {
+    const error = new Error(
+      payload?.message || `Paystack request failed with status ${response.status}`,
+    );
+    error.statusCode = response.status;
+    error.payload = payload;
+    throw error;
+  }
+
+  return payload.data;
+};
+
+const addMonths = (dateInput, months) => {
+  const date = new Date(dateInput);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  date.setMonth(date.getMonth() + months);
+  return date;
+};
+
+const computeSubscriptionEndDate = ({
+  paidAt,
+  interval = MONTHLY_INTERVAL,
+  currentSubscriptionEnds,
+}) => {
+  const anchor =
+    currentSubscriptionEnds && new Date(currentSubscriptionEnds) > new Date()
+      ? new Date(currentSubscriptionEnds)
+      : new Date(paidAt || Date.now());
+
+  if (Number.isNaN(anchor.getTime())) {
+    return null;
+  }
+
+  switch (interval) {
+    case "annually":
+      return addMonths(anchor, 12);
+    case "biannually":
+      return addMonths(anchor, 6);
+    case "quarterly":
+      return addMonths(anchor, 3);
+    case "weekly":
+      return new Date(anchor.getTime() + 7 * 24 * 60 * 60 * 1000);
+    case "daily":
+      return new Date(anchor.getTime() + 24 * 60 * 60 * 1000);
+    case "monthly":
+    default:
+      return addMonths(anchor, 1);
+  }
+};
+
+const resolveMetadataClinicId = (payload) =>
+  payload?.metadata?.clinicId ||
+  payload?.metadata?.custom_fields?.find(
+    (field) => field?.variable_name === "clinic_id",
+  )?.value ||
+  null;
+
+const findClinicForTransaction = async (transaction) => {
+  const clinicId = resolveMetadataClinicId(transaction);
+
+  if (clinicId) {
+    const clinic = await prisma.clinic.findUnique({ where: { id: clinicId } });
+    if (clinic) {
+      return clinic;
+    }
+  }
+
+  const customerEmail = transaction?.customer?.email?.trim().toLowerCase();
+  if (!customerEmail) {
+    return null;
+  }
+
+  return prisma.clinic.findUnique({
+    where: { email: customerEmail },
+  });
+};
+
+const buildCustomFields = (clinic) => [
+  {
+    display_name: "Clinic ID",
+    variable_name: "clinic_id",
+    value: clinic.id,
+  },
+  {
+    display_name: "Clinic Name",
+    variable_name: "clinic_name",
+    value: clinic.name,
+  },
+];
+
+export const serializeBillingClinic = (clinic) => ({
+  id: clinic.id,
+  plan: clinic.plan || "FREE",
+  subscriptionEnds: clinic.subscriptionEnds || null,
+  paystackCustomerCode: clinic.paystackCustomerCode || null,
+  paystackPlanCode: clinic.paystackPlanCode || null,
+  paystackSubscriptionCode: clinic.paystackSubscriptionCode || null,
+  paystackSubscriptionStatus: clinic.paystackSubscriptionStatus || null,
+  paystackNextPaymentDate: clinic.paystackNextPaymentDate || null,
+  paystackLastReference: clinic.paystackLastReference || null,
+});
+
+export const ensurePaystackPlan = async (clinic) => {
+  if (clinic.paystackPlanCode) {
+    return clinic.paystackPlanCode;
+  }
+
+  const configuredPlanCode = process.env.PAYSTACK_PRO_PLAN_CODE?.trim();
+  if (configuredPlanCode) {
+    await prisma.clinic.update({
+      where: { id: clinic.id },
+      data: { paystackPlanCode: configuredPlanCode },
+    });
+    return configuredPlanCode;
+  }
+
+  const createdPlan = await callPaystack("/plan", {
+    method: "POST",
+    body: JSON.stringify({
+      name: PRO_PLAN_NAME,
+      amount: getProPlanAmountKobo(),
+      interval: MONTHLY_INTERVAL,
+      description: PRO_PLAN_DESCRIPTION,
+      currency: "NGN",
+      send_invoices: true,
+      send_sms: false,
+    }),
+  });
+
+  await prisma.clinic.update({
+    where: { id: clinic.id },
+    data: { paystackPlanCode: createdPlan.plan_code },
+  });
+
+  return createdPlan.plan_code;
+};
+
+export const initializePaystackSubscription = async ({ clinic, actor }) => {
+  const planCode = await ensurePaystackPlan(clinic);
+  const reference = `pcare-${clinic.id}-${Date.now()}`;
+  const callbackBaseUrl = resolveBaseUrl().replace(/\/$/, "");
+
+  const data = await callPaystack("/transaction/initialize", {
+    method: "POST",
+    body: JSON.stringify({
+      email: clinic.email,
+      plan: planCode,
+      currency: "NGN",
+      reference,
+      callback_url: `${callbackBaseUrl}/billing/paystack/callback`,
+      metadata: {
+        clinicId: clinic.id,
+        clinicName: clinic.name,
+        actorId: actor.id,
+        actorEmail: actor.email,
+        plan: "PRO",
+        custom_fields: buildCustomFields(clinic),
+      },
+    }),
+  });
+
+  await prisma.clinic.update({
+    where: { id: clinic.id },
+    data: {
+      paystackLastReference: data.reference,
+      paystackPlanCode: planCode,
+    },
+  });
+
+  return {
+    authorizationUrl: data.authorization_url,
+    accessCode: data.access_code,
+    reference: data.reference,
+  };
+};
+
+export const syncClinicWithTransaction = async (transaction) => {
+  const clinic = await findClinicForTransaction(transaction);
+
+  if (!clinic) {
+    return null;
+  }
+
+  const subscriptionEnds = computeSubscriptionEndDate({
+    paidAt: transaction?.paid_at || transaction?.paidAt || transaction?.created_at,
+    interval:
+      transaction?.plan_object?.interval ||
+      transaction?.plan?.interval ||
+      MONTHLY_INTERVAL,
+    currentSubscriptionEnds: clinic.subscriptionEnds,
+  });
+
+  const updatedClinic = await prisma.clinic.update({
+    where: { id: clinic.id },
+    data: {
+      plan: "PRO",
+      paystackCustomerCode:
+        transaction?.customer?.customer_code || clinic.paystackCustomerCode,
+      paystackPlanCode:
+        transaction?.plan_object?.plan_code ||
+        transaction?.plan?.plan_code ||
+        clinic.paystackPlanCode,
+      paystackSubscriptionCode:
+        transaction?.subscription?.subscription_code ||
+        transaction?.subscription_code ||
+        clinic.paystackSubscriptionCode,
+      paystackSubscriptionStatus:
+        transaction?.subscription?.status ||
+        transaction?.status ||
+        clinic.paystackSubscriptionStatus ||
+        "active",
+      paystackSubscriptionEmailToken:
+        transaction?.subscription?.email_token ||
+        transaction?.email_token ||
+        clinic.paystackSubscriptionEmailToken,
+      paystackAuthorizationCode:
+        transaction?.authorization?.authorization_code ||
+        clinic.paystackAuthorizationCode,
+      paystackLastReference: transaction?.reference || clinic.paystackLastReference,
+      paystackNextPaymentDate:
+        transaction?.subscription?.next_payment_date
+          ? new Date(transaction.subscription.next_payment_date)
+          : transaction?.next_payment_date
+            ? new Date(transaction.next_payment_date)
+            : clinic.paystackNextPaymentDate,
+      subscriptionEnds: subscriptionEnds || clinic.subscriptionEnds,
+    },
+  });
+
+  return updatedClinic;
+};
+
+export const verifyPaystackTransaction = async (reference) => {
+  const transaction = await callPaystack(
+    `/transaction/verify/${encodeURIComponent(reference)}`,
+    { method: "GET" },
+  );
+
+  if (transaction.status !== "success") {
+    const error = new Error(
+      `Paystack transaction is ${transaction.status || "not successful"}`,
+    );
+    error.statusCode = 400;
+    error.payload = transaction;
+    throw error;
+  }
+
+  const clinic = await syncClinicWithTransaction(transaction);
+
+  return { transaction, clinic };
+};
+
+export const disableClinicSubscription = async (clinicId, status = "disabled") =>
+  prisma.clinic.update({
+    where: { id: clinicId },
+    data: {
+      plan: "FREE",
+      paystackSubscriptionStatus: status,
+      subscriptionEnds: null,
+    },
+  });
+
+export const processPaystackWebhookEvent = async (event) => {
+  const eventType = String(event?.event || "").trim();
+  const payload = event?.data || {};
+
+  if (!eventType) {
+    return null;
+  }
+
+  if (eventType === "charge.success") {
+    return syncClinicWithTransaction(payload);
+  }
+
+  if (eventType === "subscription.create" || eventType === "subscription.not_renew") {
+    const clinic = await findClinicForTransaction(payload);
+    if (!clinic) {
+      return null;
+    }
+
+    return prisma.clinic.update({
+      where: { id: clinic.id },
+      data: {
+        paystackCustomerCode:
+          payload?.customer?.customer_code || clinic.paystackCustomerCode,
+        paystackPlanCode: payload?.plan?.plan_code || clinic.paystackPlanCode,
+        paystackSubscriptionCode:
+          payload?.subscription_code || clinic.paystackSubscriptionCode,
+        paystackSubscriptionStatus: payload?.status || "active",
+        paystackSubscriptionEmailToken:
+          payload?.email_token || clinic.paystackSubscriptionEmailToken,
+        paystackNextPaymentDate: payload?.next_payment_date
+          ? new Date(payload.next_payment_date)
+          : clinic.paystackNextPaymentDate,
+      },
+    });
+  }
+
+  if (
+    eventType === "subscription.disable" ||
+    eventType === "invoice.payment_failed"
+  ) {
+    const clinic = await findClinicForTransaction(payload);
+    if (!clinic) {
+      return null;
+    }
+
+    return disableClinicSubscription(clinic.id, eventType);
+  }
+
+  return null;
+};
+
+export const verifyPaystackSignature = (rawBody, signature) => {
+  const secretKey = requirePaystackSecretKey();
+
+  const expectedSignature = crypto
+    .createHmac("sha512", secretKey)
+    .update(rawBody)
+    .digest("hex");
+
+  return expectedSignature === signature;
+};
+
+export const generatePaystackManageLink = async (subscriptionCode) => {
+  const data = await callPaystack(
+    `/subscription/${encodeURIComponent(subscriptionCode)}/manage/link`,
+    { method: "GET" },
+  );
+
+  return data?.link || null;
+};
+
+export const disablePaystackSubscription = async ({
+  subscriptionCode,
+  emailToken,
+}) => {
+  await callPaystack("/subscription/disable", {
+    method: "POST",
+    body: JSON.stringify({
+      code: subscriptionCode,
+      token: emailToken,
+    }),
+  });
+};
