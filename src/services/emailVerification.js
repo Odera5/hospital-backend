@@ -61,11 +61,11 @@ export const createEmailVerification = () => {
 export const sendVerificationEmail = async ({ email, name, token }) => {
   const verificationLink = `${getBaseUrl().replace(/\/$/, "")}/verify-email?token=${token}`;
   const recipientName = name?.trim() || "there";
-  const subject = "Welcome to PrimuxCare BHF Management Software";
+  const subject = "Welcome to PrimuxCare Management Software";
   const text = [
     `Hello ${recipientName},`,
     "",
-    "Welcome to PrimuxCare BHF Management Software.",
+    "Welcome to PrimuxCare Management Software.",
     "Please click the link below to confirm your email address and activate your account:",
     verificationLink,
     "",
@@ -87,7 +87,7 @@ export const sendVerificationEmail = async ({ email, name, token }) => {
             </table>
           </div>
           <p style="margin: 0 0 12px; font-size: 13px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #0d9488;">PrimuxCare Verification</p>
-          <h1 style="margin: 0 0 20px; font-size: 26px; font-weight: 800; color: #0f172a; line-height: 1.3;">Welcome to PrimuxCare BHF</h1>
+          <h1 style="margin: 0 0 20px; font-size: 26px; font-weight: 800; color: #0f172a; line-height: 1.3;">Welcome to PrimuxCare</h1>
           <p style="margin: 0 0 32px; font-size: 16px; color: #475569; line-height: 1.6; text-align: left;">
             Hello ${recipientName},<br><br>
             Your account has been created successfully. To complete your registration and secure your account, please verify your email address.
@@ -106,7 +106,7 @@ export const sendVerificationEmail = async ({ email, name, token }) => {
           </p>
         </div>
         <div style="max-width: 560px; margin: 24px auto 0; text-align: center; color: #94a3b8; font-size: 13px;">
-          <p style="margin: 0;">&copy; ${new Date().getFullYear()} PrimuxCare BHF Management. All rights reserved.</p>
+          <p style="margin: 0;">&copy; ${new Date().getFullYear()} PrimuxCare Management. All rights reserved.</p>
         </div>
       </div>
     `;
