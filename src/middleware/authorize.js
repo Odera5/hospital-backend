@@ -18,7 +18,7 @@ export const protect = async (req, res, next) => {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const users = await prisma.$queryRaw`
-      SELECT u.id, u.name, u.email, u.role, u."isActive", u."clinicId", c."isActive" AS "clinicIsActive"
+      SELECT u.id, u.name, u.email, u.role, u."isActive", u."clinicId", u."refreshToken", c."isActive" AS "clinicIsActive"
       FROM "User" u
       INNER JOIN "Clinic" c ON c.id = u."clinicId"
       WHERE u.id = ${decoded.id}
@@ -34,6 +34,16 @@ export const protect = async (req, res, next) => {
       return res.status(403).json({
         message: "Your clinic account has been deactivated. Contact support for reactivation.",
       });
+    }
+
+    if (decoded.sessionId) {
+      if (!user.refreshToken) {
+        return res.status(401).json({ message: "Session invalid. Please log in again." });
+      }
+      const currentSessionId = user.refreshToken.substring(user.refreshToken.length - 15);
+      if (decoded.sessionId !== currentSessionId) {
+        return res.status(401).json({ message: "Session expired. You logged in on another device." });
+      }
     }
 
     req.user = user;

@@ -13,17 +13,20 @@ if (!process.env.JWT_REFRESH_SECRET) {
 
 const resolveUserId = (user) => user.id || user._id;
 
-export const generateAccessToken = (user) =>
-  jwt.sign(
-    {
-      id: resolveUserId(user),
-      role: user.role,
-      clinicId: user.clinicId,
-      clinicName: user.clinic?.name || user.clinicName || "",
-    },
-    process.env.JWT_SECRET,
-    { expiresIn: "15m" },
-  );
+export const generateAccessToken = (user, sessionId = null) => {
+  const payload = {
+    id: resolveUserId(user),
+    role: user.role,
+    clinicId: user.clinicId,
+    clinicName: user.clinic?.name || user.clinicName || "",
+  };
+  
+  if (sessionId) {
+    payload.sessionId = sessionId;
+  }
+
+  return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: "15m" });
+};
 
 export const generateRefreshToken = (user) =>
   jwt.sign(

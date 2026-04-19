@@ -559,8 +559,9 @@ router.post("/login", async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(400).json({ message: "Invalid password" });
 
-    const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user);
+    const sessionId = refreshToken.substring(refreshToken.length - 15);
+    const accessToken = generateAccessToken(user, sessionId);
 
     await prisma.user.update({
       where: { id: user.id },
@@ -703,7 +704,8 @@ router.post("/refresh-token", async (req, res) => {
       });
     }
 
-    const newAccessToken = generateAccessToken(user);
+    const sessionId = user.refreshToken.substring(user.refreshToken.length - 15);
+    const newAccessToken = generateAccessToken(user, sessionId);
     res.json({ accessToken: newAccessToken });
   } catch (error) {
     console.error("Refresh token error:", error);

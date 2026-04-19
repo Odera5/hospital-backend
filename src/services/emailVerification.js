@@ -90,7 +90,7 @@ export const sendVerificationEmail = async ({ email, name, token }) => {
           <h1 style="margin: 0 0 20px; font-size: 26px; font-weight: 800; color: #0f172a; line-height: 1.3;">Welcome to PrimuxCare</h1>
           <p style="margin: 0 0 32px; font-size: 16px; color: #475569; line-height: 1.6; text-align: left;">
             Hello ${recipientName},<br><br>
-            Your account has been created successfully. To complete your registration and secure your account, please verify your email address.
+            Your account has been created successfully. To complete your registration and secure your account, please verify your email address. This verification link is valid for 24 hours.
           </p>
           <div style="margin: 32px 0;">
             <a href="${verificationLink}" style="display: inline-block; background-color: #0f766e; color: #ffffff; text-decoration: none; padding: 16px 36px; border-radius: 12px; font-weight: 600; font-size: 16px;">
