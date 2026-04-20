@@ -200,6 +200,7 @@ export const initializePaystackSubscription = async ({ clinic, actor }) => {
     method: "POST",
     body: JSON.stringify({
       email: clinic.email,
+      amount: getProPlanAmountKobo(),
       plan: planCode,
       currency: "NGN",
       reference,
@@ -262,7 +263,7 @@ export const syncClinicWithTransaction = async (transaction) => {
         clinic.paystackSubscriptionCode,
       paystackSubscriptionStatus:
         transaction?.subscription?.status ||
-        transaction?.status ||
+        (transaction?.status === "success" ? "active" : transaction?.status) ||
         clinic.paystackSubscriptionStatus ||
         "active",
       paystackSubscriptionEmailToken:
