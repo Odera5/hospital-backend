@@ -6,13 +6,13 @@ const PRO_PLAN_NAME = "PrimuxCare Pro Monthly";
 const PRO_PLAN_DESCRIPTION =
   "PrimuxCare Pro monthly subscription for clinics in Nigeria";
 const MONTHLY_INTERVAL = "monthly";
-const DEFAULT_PRO_AMOUNT_KOBO = 1200000;
+const DEFAULT_PRO_AMOUNT_KOBO = 10000000;
 
 const PRO_PLAN_NAME_ANNUAL = "PrimuxCare Pro Annual";
 const PRO_PLAN_DESCRIPTION_ANNUAL =
   "PrimuxCare Pro annual subscription for clinics in Nigeria";
 const ANNUAL_INTERVAL = "annually";
-const DEFAULT_PRO_AMOUNT_KOBO_ANNUAL = 12000000;
+const DEFAULT_PRO_AMOUNT_KOBO_ANNUAL = 100000000;
 
 const resolveBaseUrl = () =>
   process.env.APP_BASE_URL?.trim() ||
