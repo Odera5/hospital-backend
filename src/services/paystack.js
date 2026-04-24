@@ -8,6 +8,12 @@ const PRO_PLAN_DESCRIPTION =
 const MONTHLY_INTERVAL = "monthly";
 const DEFAULT_PRO_AMOUNT_KOBO = 1200000;
 
+const PRO_PLAN_NAME_ANNUAL = "PrimuxCare Pro Annual";
+const PRO_PLAN_DESCRIPTION_ANNUAL =
+  "PrimuxCare Pro annual subscription for clinics in Nigeria";
+const ANNUAL_INTERVAL = "annually";
+const DEFAULT_PRO_AMOUNT_KOBO_ANNUAL = 12000000;
+
 const resolveBaseUrl = () =>
   process.env.APP_BASE_URL?.trim() ||
   process.env.FRONTEND_URL?.trim() ||
@@ -28,11 +34,30 @@ const requirePaystackSecretKey = () => {
   return key;
 };
 
-const getProPlanAmountKobo = () => {
+const getPlanConfig = (interval = MONTHLY_INTERVAL) => {
+  if (interval === ANNUAL_INTERVAL) {
+    const configuredAmount = Number(process.env.PAYSTACK_PRO_PLAN_AMOUNT_KOBO_ANNUAL);
+    return {
+      name: PRO_PLAN_NAME_ANNUAL,
+      description: PRO_PLAN_DESCRIPTION_ANNUAL,
+      amount: Number.isFinite(configuredAmount) && configuredAmount > 0
+        ? Math.round(configuredAmount)
+        : DEFAULT_PRO_AMOUNT_KOBO_ANNUAL,
+      interval: ANNUAL_INTERVAL,
+      envPlanCode: process.env.PAYSTACK_PRO_PLAN_CODE_ANNUAL?.trim(),
+    };
+  }
+
   const configuredAmount = Number(process.env.PAYSTACK_PRO_PLAN_AMOUNT_KOBO);
-  return Number.isFinite(configuredAmount) && configuredAmount > 0
-    ? Math.round(configuredAmount)
-    : DEFAULT_PRO_AMOUNT_KOBO;
+  return {
+    name: PRO_PLAN_NAME,
+    description: PRO_PLAN_DESCRIPTION,
+    amount: Number.isFinite(configuredAmount) && configuredAmount > 0
+      ? Math.round(configuredAmount)
+      : DEFAULT_PRO_AMOUNT_KOBO,
+    interval: MONTHLY_INTERVAL,
+    envPlanCode: process.env.PAYSTACK_PRO_PLAN_CODE?.trim(),
+  };
 };
 
 const getPaystackHeaders = () => ({
@@ -156,43 +181,37 @@ export const serializeBillingClinic = (clinic) => ({
   paystackLastReference: clinic.paystackLastReference || null,
 });
 
-export const ensurePaystackPlan = async (clinic) => {
-  if (clinic.paystackPlanCode) {
-    return clinic.paystackPlanCode;
+export const ensurePaystackPlan = async (clinic, interval = MONTHLY_INTERVAL) => {
+  const config = getPlanConfig(interval);
+
+  // If env plan code is set, use it. We'll optionally save it to clinic later
+  // if they successfully subscribe.
+  if (config.envPlanCode) {
+    return config.envPlanCode;
   }
 
-  const configuredPlanCode = process.env.PAYSTACK_PRO_PLAN_CODE?.trim();
-  if (configuredPlanCode) {
-    await prisma.clinic.update({
-      where: { id: clinic.id },
-      data: { paystackPlanCode: configuredPlanCode },
-    });
-    return configuredPlanCode;
-  }
-
+  // If no env plan code, and clinic already has a plan code matching this interval,
+  // we could reuse it, but we don't strictly know if it matches the interval.
+  // To be safe, we just create a new plan if we don't have it configured in .env.
   const createdPlan = await callPaystack("/plan", {
     method: "POST",
     body: JSON.stringify({
-      name: PRO_PLAN_NAME,
-      amount: getProPlanAmountKobo(),
-      interval: MONTHLY_INTERVAL,
-      description: PRO_PLAN_DESCRIPTION,
+      name: config.name,
+      amount: config.amount,
+      interval: config.interval,
+      description: config.description,
       currency: "NGN",
       send_invoices: true,
       send_sms: false,
     }),
   });
 
-  await prisma.clinic.update({
-    where: { id: clinic.id },
-    data: { paystackPlanCode: createdPlan.plan_code },
-  });
-
   return createdPlan.plan_code;
 };
 
-export const initializePaystackSubscription = async ({ clinic, actor }) => {
-  const planCode = await ensurePaystackPlan(clinic);
+export const initializePaystackSubscription = async ({ clinic, actor, interval = MONTHLY_INTERVAL }) => {
+  const planCode = await ensurePaystackPlan(clinic, interval);
+  const config = getPlanConfig(interval);
   const reference = `pcare-${clinic.id}-${Date.now()}`;
   const callbackBaseUrl = resolveBaseUrl().replace(/\/$/, "");
 
@@ -200,7 +219,7 @@ export const initializePaystackSubscription = async ({ clinic, actor }) => {
     method: "POST",
     body: JSON.stringify({
       email: clinic.email,
-      amount: getProPlanAmountKobo(),
+      amount: config.amount,
       plan: planCode,
       currency: "NGN",
       reference,
@@ -211,6 +230,7 @@ export const initializePaystackSubscription = async ({ clinic, actor }) => {
         actorId: actor.id,
         actorEmail: actor.email,
         plan: "PRO",
+        interval: config.interval,
         custom_fields: buildCustomFields(clinic),
       },
     }),
@@ -220,7 +240,6 @@ export const initializePaystackSubscription = async ({ clinic, actor }) => {
     where: { id: clinic.id },
     data: {
       paystackLastReference: data.reference,
-      paystackPlanCode: planCode,
     },
   });
 

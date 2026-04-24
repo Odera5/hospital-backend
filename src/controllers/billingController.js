@@ -28,6 +28,8 @@ export const getBillingOverview = async (req, res) => {
 
 export const initializePaystackCheckout = async (req, res) => {
   try {
+    const interval = req.body.interval === "annually" ? "annually" : "monthly";
+
     const clinic = await prisma.clinic.findUnique({
       where: { id: req.user.clinicId },
     });
@@ -39,6 +41,7 @@ export const initializePaystackCheckout = async (req, res) => {
     const checkout = await initializePaystackSubscription({
       clinic,
       actor: req.user,
+      interval,
     });
 
     return res.status(201).json(checkout);
