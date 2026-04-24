@@ -109,6 +109,12 @@ const refreshVerificationForUser = async (user) => {
   return updatedUser;
 };
 
+const hasActivePaidSubscription = (clinic) => {
+  return ACTIVE_PAYSTACK_SUBSCRIPTION_STATUSES.includes(
+    String(clinic?.paystackSubscriptionStatus || "").toLowerCase(),
+  );
+};
+
 const shouldAutoDowngradeClinic = (clinic) => {
   const hasActivePaystackSubscription = ACTIVE_PAYSTACK_SUBSCRIPTION_STATUSES.includes(
     String(clinic?.paystackSubscriptionStatus || "").toLowerCase(),
@@ -385,6 +391,28 @@ router.post("/signup", protect, authorizeRoles("admin"), async (req, res) => {
 
     if (existingUser) {
       return res.status(400).json({ message: "User already exists" });
+    }
+
+    // Enforce Staff Limits for Free/Trial Accounts
+    const clinic = await prisma.clinic.findUnique({
+      where: { id: req.user.clinicId }
+    });
+
+    if (!clinic) {
+      return res.status(404).json({ message: "Clinic not found" });
+    }
+
+    const hasPaid = hasActivePaidSubscription(clinic);
+    if (!hasPaid) {
+      const currentStaffCount = await prisma.user.count({
+        where: { clinicId: req.user.clinicId }
+      });
+      
+      if (currentStaffCount >= 2) {
+        return res.status(403).json({ 
+          message: "You have reached the staff limit for trial/free accounts. Please upgrade your plan to add unlimited staff members." 
+        });
+      }
     }
 
     const hashedPassword = await bcrypt.hash(password.trim(), 10);

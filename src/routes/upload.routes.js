@@ -1,19 +1,13 @@
 import express from "express";
 import multer from "multer";
+import multerS3 from "multer-s3";
 import path from "path";
-import fs from "fs";
 import { verifyToken } from "../middleware/auth.js";
 import { requireProOrEnterprise } from "../middleware/subscriptionGuard.js";
+import { s3Client, bucketName } from "../lib/s3.js";
 
 const router = express.Router();
 
-// Keep public assets isolated from protected patient attachments.
-const uploadDir = path.join(process.cwd(), "uploads", "public", "branding");
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-// Map MIME types to extensions to handle blobs gracefully
 const extMap = {
   "image/jpeg": ".jpg",
   "image/png": ".png",
@@ -21,21 +15,18 @@ const extMap = {
   "application/pdf": ".pdf",
 };
 
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, uploadDir);
-  },
-  filename: function (req, file, cb) {
-    // Generate a unique filename: <timestamp>-<originalName>
+const storage = multerS3({
+  s3: s3Client,
+  bucket: bucketName,
+  contentType: multerS3.AUTO_CONTENT_TYPE,
+  key: function (req, file, cb) {
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    // If the file comes via Blob/FormData without extension, append it from mimetype
     let ext = path.extname(file.originalname);
     if (!ext && extMap[file.mimetype]) {
       ext = extMap[file.mimetype];
     }
-    // Clean original name to prevent weird characters
     const safeName = file.originalname.replace(/[^a-zA-Z0-9.-]/g, "_");
-    cb(null, `${uniqueSuffix}${ext ? "" : "-" + safeName}${ext}`);
+    cb(null, `branding/${uniqueSuffix}${ext ? "" : "-" + safeName}${ext}`);
   },
 });
 
@@ -65,7 +56,8 @@ router.post("/", verifyToken, requireProOrEnterprise, upload.single("file"), (re
       return res.status(400).json({ message: "No file uploaded." });
     }
 
-    const fileUrl = `/uploads/branding/${req.file.filename}`;
+    const filename = path.basename(req.file.key);
+    const fileUrl = `/uploads/branding/${filename}`;
     
     res.status(200).json({
       message: "File uploaded successfully",

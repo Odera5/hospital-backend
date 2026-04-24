@@ -1,22 +1,18 @@
 import multer from "multer";
-import fs from "fs";
+import multerS3 from "multer-s3";
 import path from "path";
+import { s3Client, bucketName } from "../lib/s3.js";
 
-const uploadDirectory = path.join(process.cwd(), "uploads", "records");
-
-if (!fs.existsSync(uploadDirectory)) {
-  fs.mkdirSync(uploadDirectory, { recursive: true });
-}
-
-// Set storage engine
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, uploadDirectory);
-  },
-  filename: function (req, file, cb) {
+// Set storage engine to Cloudflare R2 via S3 API
+const storage = multerS3({
+  s3: s3Client,
+  bucket: bucketName,
+  acl: 'private', // Keep patient records private
+  contentType: multerS3.AUTO_CONTENT_TYPE,
+  key: function (req, file, cb) {
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
     const ext = path.extname(file.originalname);
-    cb(null, file.fieldname + "-" + uniqueSuffix + ext);
+    cb(null, `records/${file.fieldname}-${uniqueSuffix}${ext}`);
   },
 });
 

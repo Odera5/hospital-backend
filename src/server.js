@@ -16,6 +16,7 @@ import { apiLimiter } from "./middleware/rateLimit.js";
 import { logger } from "./middleware/logger.js";
 import { handlePaystackWebhook } from "./controllers/billingController.js";
 import path from "path";
+import fs from "fs";
 
 dotenv.config();
 
@@ -69,8 +70,35 @@ app.use(express.json());
 app.use(logger);
 app.use("/api", apiLimiter); // make sure apiLimiter calls next()
 // =========================
-// STATIC DIRECTORIES
+// STATIC DIRECTORIES & FILE PROXIES
 // =========================
+
+// Proxy branding images from Cloudflare R2
+app.get("/uploads/branding/:filename", async (req, res) => {
+  try {
+    const { s3Client, bucketName } = await import("./lib/s3.js");
+    const { GetObjectCommand } = await import("@aws-sdk/client-s3");
+    
+    if (!bucketName) throw new Error("R2 not configured");
+    
+    const command = new GetObjectCommand({
+      Bucket: bucketName,
+      Key: `branding/${req.params.filename}`,
+    });
+    
+    const s3Response = await s3Client.send(command);
+    res.set("Content-Type", s3Response.ContentType);
+    s3Response.Body.pipe(res);
+  } catch (error) {
+    // Fallback to local files if S3 fails or file is not in S3 (e.g., old files before migration)
+    const localPath = path.join(process.cwd(), "uploads", "public", "branding", req.params.filename);
+    if (fs.existsSync(localPath)) {
+      return res.sendFile(localPath);
+    }
+    res.status(404).json({ message: "File not found" });
+  }
+});
+
 app.use(
   "/uploads",
   express.static(path.join(process.cwd(), "uploads", "public")),

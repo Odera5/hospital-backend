@@ -12,6 +12,7 @@ import {
   toEncryptedPatientData,
 } from "../utils/patientCrypto.js";
 import { serializeRecord } from "../utils/serializers.js";
+import { generatePresignedUrl, deleteObjectFromS3 } from "../lib/s3.js";
 
 const router = express.Router();
 
@@ -641,10 +642,16 @@ router.put(
           : [removedAttachments]
         : [];
 
-      removedNames.forEach((name) => {
+      for (const name of removedNames) {
+        try {
+          await deleteObjectFromS3(`records/${name}`);
+        } catch (err) {
+          console.error("Failed to delete from S3:", err);
+        }
+        // Fallback for old local files
         const filePath = path.join("uploads", "records", name);
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      });
+      }
 
       const retainedAttachments = existingAttachments.filter(
         (attachment) => !removedNames.includes(attachment?.name),
@@ -734,12 +741,17 @@ router.get(
         return res.status(404).json({ message: "Attachment not found" });
       }
 
-      const filePath = path.join(process.cwd(), "uploads", "records", fileName);
-      if (!fs.existsSync(filePath)) {
+      try {
+        const url = await generatePresignedUrl(`records/${fileName}`);
+        return res.redirect(url);
+      } catch (err) {
+        // Fallback to local files if S3 fails or file is not in S3
+        const filePath = path.join(process.cwd(), "uploads", "records", fileName);
+        if (fs.existsSync(filePath)) {
+          return res.sendFile(filePath);
+        }
         return res.status(404).json({ message: "Attachment file not found" });
       }
-
-      return res.sendFile(filePath);
     } catch (error) {
       console.error("Get attachment error:", error);
       return res.status(500).json({ message: "Failed to fetch attachment" });
@@ -788,10 +800,16 @@ router.delete(
           .json({ message: "Record not found for this patient" });
       }
 
-      normalizeAttachments(record.attachments).forEach((attachment) => {
+      for (const attachment of normalizeAttachments(record.attachments)) {
+        try {
+          await deleteObjectFromS3(`records/${attachment.name}`);
+        } catch (err) {
+          console.error("Failed to delete from S3:", err);
+        }
+        // Fallback for old local files
         const filePath = path.join("uploads", "records", attachment.name);
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      });
+      }
 
       await prisma.record.delete({ where: { id: record.id } });
 
