@@ -7,7 +7,7 @@ import { toEncryptedPatientData } from "../utils/patientCrypto.js";
 const router = express.Router();
 
 const normalizeText = (value) => (typeof value === "string" ? value.trim() : "");
-const formatCardNumber = (sequence) => `PAT-${String(sequence).padStart(6, "0")}`;
+const formatCardNumber = (sequence) => `P-${String(sequence).padStart(6, "0")}`;
 
 const isPatientCardSequenceConflict = (error) =>
   error instanceof Prisma.PrismaClientKnownRequestError &&

@@ -58,6 +58,10 @@ export const createEmailVerification = () => {
   };
 };
 
+export const generateOtp = () => {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+};
+
 export const sendVerificationEmail = async ({ email, name, token }) => {
   const verificationLink = `${getBaseUrl().replace(/\/$/, "")}/verify-email?token=${token}`;
   const recipientName = name?.trim() || "there";
@@ -145,6 +149,79 @@ export const sendVerificationEmail = async ({ email, name, token }) => {
     html,
   });
 };
+
+export const sendDeactivationOtpEmail = async ({ email, name, otp }) => {
+  const recipientName = name?.trim() || "there";
+  const subject = "Clinic Deactivation Verification Code - PrimuxCare";
+  const text = [
+    `Hello ${recipientName},`,
+    "",
+    "You have initiated the process to deactivate your clinic account.",
+    `Your verification code is: ${otp}`,
+    "",
+    "This code will expire in 15 minutes. If you did not request this, please secure your account immediately.",
+  ].join("\n");
+  const html = `
+      <div style="font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; padding: 40px 20px;">
+        <div style="max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; padding: 48px 40px; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05); text-align: center;">
+          <h1 style="margin: 0 0 20px; font-size: 26px; font-weight: 800; color: #b91c1c; line-height: 1.3;">Deactivation Request</h1>
+          <p style="margin: 0 0 32px; font-size: 16px; color: #475569; line-height: 1.6; text-align: left;">
+            Hello ${recipientName},<br><br>
+            A request was made to deactivate your clinic account. If you proceed, all staff logins will be blocked and your subscription will be paused.
+          </p>
+          <div style="margin: 32px 0; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 24px;">
+            <p style="margin: 0 0 8px; font-size: 14px; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Your Verification Code</p>
+            <p style="margin: 0; font-size: 32px; font-weight: 800; color: #0f172a; letter-spacing: 0.25em;">${otp}</p>
+          </div>
+          <p style="margin: 0 0 8px; font-size: 14px; color: #dc2626; line-height: 1.6; text-align: center; font-weight: 500;">
+            This code will expire in 15 minutes.
+          </p>
+          <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 32px 0;">
+          <p style="margin: 0 0 8px; font-size: 13px; color: #64748b; line-height: 1.6; text-align: left;">
+            If you did not request this deactivation, please ignore this email and secure your account immediately.
+          </p>
+        </div>
+        <div style="max-width: 560px; margin: 24px auto 0; text-align: center; color: #94a3b8; font-size: 13px;">
+          <p style="margin: 0;">&copy; ${new Date().getFullYear()} PrimuxCare Management. All rights reserved.</p>
+        </div>
+      </div>
+    `;
+
+  if (isResendConfigured()) {
+    const response = await fetch(RESEND_API_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: `PrimuxCare <${getSenderEmail()}>`,
+        to: [email],
+        subject,
+        text,
+        html,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      const error = new Error(`Resend API error: ${response.status} ${errorText}`);
+      error.code = "RESEND_API_ERROR";
+      throw error;
+    }
+
+    return;
+  }
+
+  await getTransporter().sendMail({
+    from: `"PrimuxCare" <${getSenderEmail()}>`,
+    to: email,
+    subject,
+    text,
+    html,
+  });
+};
+
 
 export const getVerificationErrorMessage = (error) => {
   if (

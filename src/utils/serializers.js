@@ -10,6 +10,7 @@ export const serializeRecord = (record) => ({
   consentDate: record.consentDate || null,
   consentTakenBy: record.consentTakenBy || "",
   consentNotes: record.consentNotes || "",
+  isDeleted: Boolean(record.isDeleted),
 });
 
 export const serializeInvoice = (invoice) => ({

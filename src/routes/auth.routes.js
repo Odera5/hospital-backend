@@ -8,6 +8,8 @@ import {
   createEmailVerification,
   getVerificationErrorMessage,
   sendVerificationEmail,
+  generateOtp,
+  sendDeactivationOtpEmail,
 } from "../services/emailVerification.js";
 
 const router = express.Router();
@@ -226,8 +228,23 @@ router.put("/clinic-profile", protect, authorizeRoles("admin"), async (req, res)
   }
 });
 
-router.patch("/clinic-profile/deactivate", protect, authorizeRoles("admin"), async (req, res) => {
+router.post("/clinic-profile/deactivate/initiate", protect, authorizeRoles("admin"), async (req, res) => {
   try {
+    const { password } = req.body;
+    if (!password) {
+      return res.status(400).json({ message: "Password is required to initiate deactivation" });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      include: { clinic: true },
+    });
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ message: "Incorrect password" });
+    }
+
     const activeAdminCount = await prisma.user.count({
       where: {
         clinicId: req.user.clinicId,
@@ -242,6 +259,67 @@ router.patch("/clinic-profile/deactivate", protect, authorizeRoles("admin"), asy
       });
     }
 
+    const otp = generateOtp();
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 mins
+
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: {
+        emailVerificationToken: otp,
+        emailVerificationExpiresAt: expiresAt,
+      },
+    });
+
+    try {
+      await sendDeactivationOtpEmail({
+        email: user.email,
+        name: user.name,
+        otp,
+      });
+      res.json({ message: "Verification code sent to your email" });
+    } catch (emailError) {
+      console.error("Deactivation OTP email error:", emailError);
+      if (process.env.NODE_ENV !== "production") {
+        console.log(`[LOCAL DEV] OTP for deactivation is: ${otp}`);
+        return res.json({ message: "Verification code sent to your email" });
+      }
+      return res.status(500).json({ message: "Failed to send verification email. Please try again later." });
+    }
+  } catch (error) {
+    console.error("Initiate deactivate clinic error:", error);
+    res.status(500).json({ message: "Failed to initiate clinic deactivation" });
+  }
+});
+
+router.post("/clinic-profile/deactivate/verify", protect, authorizeRoles("admin"), async (req, res) => {
+  try {
+    const { otp } = req.body;
+    if (!otp) {
+      return res.status(400).json({ message: "Verification code is required" });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+    });
+
+    if (
+      !user.emailVerificationToken || 
+      user.emailVerificationToken !== otp || 
+      !user.emailVerificationExpiresAt || 
+      user.emailVerificationExpiresAt.getTime() < Date.now()
+    ) {
+      return res.status(400).json({ message: "Invalid or expired verification code" });
+    }
+
+    // Clear the token
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: {
+        emailVerificationToken: null,
+        emailVerificationExpiresAt: null,
+      },
+    });
+
     const clinic = await prisma.clinic.update({
       where: { id: req.user.clinicId },
       data: { isActive: false },
@@ -253,12 +331,11 @@ router.patch("/clinic-profile/deactivate", protect, authorizeRoles("admin"), asy
     });
 
     res.json({
-      message:
-        "Clinic deactivated successfully. All staff logins are now blocked until support reactivates the clinic.",
+      message: "Clinic deactivated successfully. All staff logins are now blocked until support reactivates the clinic.",
       clinic: serializeClinic(clinic),
     });
   } catch (error) {
-    console.error("Deactivate clinic error:", error);
+    console.error("Verify deactivate clinic error:", error);
     res.status(500).json({ message: "Failed to deactivate clinic" });
   }
 });

@@ -98,7 +98,7 @@ const buildExaminationSummary = ({
   return sections.map(([label, value]) => `${label}: ${value}`).join("\n");
 };
 
-const formatCardNumber = (sequence) => `PAT-${String(sequence).padStart(6, "0")}`;
+const formatCardNumber = (sequence) => `P-${String(sequence).padStart(6, "0")}`;
 
 const isPatientCardSequenceConflict = (error) =>
   error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -768,8 +768,9 @@ router.get(
       const patient = await getPatientOr404(req.params.id, req.user.clinicId);
       if (!patient) return res.status(404).json({ message: "Patient not found" });
 
+      const isTrash = req.query.trash === "true";
       const records = await prisma.record.findMany({
-        where: { patientId: patient.id },
+        where: { patientId: patient.id, isDeleted: isTrash },
         orderBy: { createdAt: "desc" },
       });
 
@@ -800,6 +801,70 @@ router.delete(
           .json({ message: "Record not found for this patient" });
       }
 
+      await prisma.record.update({
+        where: { id: record.id },
+        data: { isDeleted: true, deletedAt: new Date() }
+      });
+
+      res.json({ message: "Record moved to Trash" });
+    } catch (error) {
+      console.error("Soft delete record error:", error);
+      res.status(500).json({ message: "Failed to delete record" });
+    }
+  },
+);
+
+router.patch(
+  "/:id/records/:recordId/restore",
+  protect,
+  authorizeRoles("admin", "doctor"),
+  async (req, res) => {
+    try {
+      const patient = await getPatientOr404(req.params.id, req.user.clinicId);
+      if (!patient) return res.status(404).json({ message: "Patient not found" });
+
+      const record = await prisma.record.findUnique({
+        where: { id: req.params.recordId },
+      });
+
+      if (!record || record.patientId !== patient.id) {
+        return res.status(404).json({ message: "Record not found for this patient" });
+      }
+
+      const updatedRecord = await prisma.record.update({
+        where: { id: req.params.recordId },
+        data: { isDeleted: false, deletedAt: null }
+      });
+
+      res.json(serializeRecord(updatedRecord));
+    } catch (error) {
+      console.error("Restore record error:", error);
+      res.status(500).json({ message: "Server error" });
+    }
+  }
+);
+
+router.delete(
+  "/:id/records/:recordId/hard",
+  protect,
+  authorizeRoles("admin", "doctor"),
+  async (req, res) => {
+    try {
+      const patient = await getPatientOr404(req.params.id, req.user.clinicId);
+      if (!patient) return res.status(404).json({ message: "Patient not found" });
+
+      const record = await prisma.record.findUnique({
+        where: { id: req.params.recordId },
+      });
+
+      if (!record || record.patientId !== patient.id) {
+        return res.status(404).json({ message: "Record not found for this patient" });
+      }
+      
+      if (!record.isDeleted) {
+        return res.status(400).json({ message: "Record must be in trash to be permanently deleted" });
+      }
+
       for (const attachment of normalizeAttachments(record.attachments)) {
         try {
           await deleteObjectFromS3(`records/${attachment.name}`);
@@ -823,12 +888,12 @@ router.delete(
         },
       });
 
-      res.json({ message: "Record deleted successfully" });
+      res.json({ message: "Record permanently deleted" });
     } catch (error) {
-      console.error("Delete record error:", error);
+      console.error("Hard delete record error:", error);
       res.status(500).json({ message: "Failed to delete record" });
     }
-  },
+  }
 );
 
 export default router;
