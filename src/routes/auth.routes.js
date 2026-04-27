@@ -10,7 +10,9 @@ import {
   sendVerificationEmail,
   generateOtp,
   sendDeactivationOtpEmail,
+  sendPasswordResetEmail,
 } from "../services/emailVerification.js";
+import crypto from "crypto";
 
 const router = express.Router();
 const STAFF_ROLES = ["admin", "doctor", "nurse"];
@@ -48,6 +50,7 @@ const serializeClinic = (clinic) =>
         name: clinic.name,
         email: clinic.email,
         phone: clinic.phone,
+        country: clinic.country || "",
         city: clinic.city,
         address: clinic.address,
         contactPerson: clinic.contactPerson,
@@ -174,6 +177,7 @@ router.put("/clinic-profile", protect, authorizeRoles("admin"), async (req, res)
     const clinicName = req.body?.clinicName?.trim();
     const clinicEmail = req.body?.clinicEmail?.trim().toLowerCase();
     const clinicPhone = req.body?.clinicPhone?.trim() || "";
+    const clinicCountry = req.body?.clinicCountry?.trim() || "";
     const clinicCity = req.body?.clinicCity?.trim() || "";
     const clinicAddress = req.body?.clinicAddress?.trim() || "";
     const contactPerson = req.body?.contactPerson?.trim() || "";
@@ -209,6 +213,7 @@ router.put("/clinic-profile", protect, authorizeRoles("admin"), async (req, res)
         name: clinicName,
         email: clinicEmail,
         phone: clinicPhone,
+        country: clinicCountry,
         city: clinicCity,
         address: clinicAddress,
         contactPerson,
@@ -346,6 +351,7 @@ router.post("/register-clinic", async (req, res) => {
       clinicName,
       clinicEmail,
       clinicPhone,
+      clinicCountry,
       clinicCity,
       clinicAddress,
       adminName,
@@ -398,6 +404,7 @@ router.post("/register-clinic", async (req, res) => {
           name: clinicName.trim(),
           email: normalizedClinicEmail,
           phone: clinicPhone?.trim() || "",
+          country: clinicCountry?.trim() || "",
           city: clinicCity?.trim() || "",
           address: clinicAddress?.trim() || "",
           contactPerson: adminName.trim(),
@@ -831,6 +838,95 @@ router.post("/logout", async (req, res) => {
     res.sendStatus(204);
   } catch (error) {
     console.error("Logout error:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+router.post("/forgot-password", async (req, res) => {
+  try {
+    const email = String(req.body?.email || "")
+      .toLowerCase()
+      .trim();
+
+    if (!email) {
+      return res.status(400).json({ message: "Email is required" });
+    }
+
+    const user = await getUserByEmail(email);
+
+    // We still return success even if user not found to prevent email enumeration attacks
+    if (!user || !user.isActive) {
+      return res.json({ message: "If an account exists, a password reset link has been sent to the email." });
+    }
+
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    const resetPasswordExpiresAt = new Date(Date.now() + 1000 * 60 * 60); // 1 hour
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        resetPasswordToken: resetToken,
+        resetPasswordExpiresAt,
+      },
+    });
+
+    try {
+      await sendPasswordResetEmail({
+        email: user.email,
+        name: user.name,
+        token: resetToken,
+      });
+    } catch (emailError) {
+      console.error("Forgot password email error:", emailError);
+      // We don't rollback the token, they can try again
+      return res.status(500).json({ message: "Failed to send reset email. Please try again later." });
+    }
+
+    res.json({ message: "If an account exists, a password reset link has been sent to the email." });
+  } catch (error) {
+    console.error("Forgot password error:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+router.post("/reset-password", async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+
+    if (!token || !newPassword) {
+      return res.status(400).json({ message: "Token and new password are required" });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({ message: "Password must be at least 8 characters long" });
+    }
+
+    const user = await prisma.user.findFirst({
+      where: {
+        resetPasswordToken: token,
+      },
+    });
+
+    if (!user || !user.resetPasswordExpiresAt || user.resetPasswordExpiresAt.getTime() < Date.now()) {
+      return res.status(400).json({ message: "This password reset link is invalid or has expired." });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword.trim(), 10);
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        password: hashedPassword,
+        resetPasswordToken: null,
+        resetPasswordExpiresAt: null,
+        // Optional: clear refresh tokens to force re-login on all devices
+        refreshToken: null,
+      },
+    });
+
+    res.json({ message: "Password reset successfully. You can now sign in with your new password." });
+  } catch (error) {
+    console.error("Reset password error:", error);
     res.status(500).json({ message: "Server error" });
   }
 });

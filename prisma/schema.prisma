@@ -18,6 +18,8 @@ model User {
   emailVerified Boolean      @default(false)
   emailVerificationToken String?
   emailVerificationExpiresAt DateTime?
+  resetPasswordToken   String?
+  resetPasswordExpiresAt DateTime?
   refreshToken String?
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
@@ -59,6 +61,7 @@ model Clinic {
   name           String
   email          String    @unique
   phone          String    @default("")
+  country        String    @default("")
   city           String    @default("")
   address        String    @default("")
   contactPerson  String    @default("")

@@ -222,6 +222,84 @@ export const sendDeactivationOtpEmail = async ({ email, name, otp }) => {
   });
 };
 
+export const sendPasswordResetEmail = async ({ email, name, token }) => {
+  const resetLink = `${getBaseUrl().replace(/\/$/, "")}/reset-password?token=${token}`;
+  const recipientName = name?.trim() || "there";
+  const subject = "Password Reset Request - PrimuxCare";
+  const text = [
+    `Hello ${recipientName},`,
+    "",
+    "We received a request to reset your password.",
+    "Please click the link below to choose a new password:",
+    resetLink,
+    "",
+    "This link will expire in 1 hour.",
+    "If you did not request this, please ignore this email and your password will remain unchanged.",
+  ].join("\n");
+  const html = `
+      <div style="font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; padding: 40px 20px;">
+        <div style="max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; padding: 48px 40px; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05); text-align: center;">
+          <h1 style="margin: 0 0 20px; font-size: 26px; font-weight: 800; color: #0f172a; line-height: 1.3;">Reset Your Password</h1>
+          <p style="margin: 0 0 32px; font-size: 16px; color: #475569; line-height: 1.6; text-align: left;">
+            Hello ${recipientName},<br><br>
+            We received a request to reset the password for your PrimuxCare account. Click the button below to choose a new password. This link is valid for 1 hour.
+          </p>
+          <div style="margin: 32px 0;">
+            <a href="${resetLink}" style="display: inline-block; background-color: #0f766e; color: #ffffff; text-decoration: none; padding: 16px 36px; border-radius: 12px; font-weight: 600; font-size: 16px;">
+              Reset Password
+            </a>
+          </div>
+          <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 32px 0;">
+          <p style="margin: 0 0 8px; font-size: 13px; color: #64748b; line-height: 1.6; text-align: left;">
+            If the button doesn't work, copy and paste this link securely into your browser:
+          </p>
+          <p style="margin: 0; font-size: 13px; word-break: break-all; color: #0f766e; text-align: left; text-decoration: underline;">
+            ${resetLink}
+          </p>
+          <p style="margin: 24px 0 0; font-size: 13px; color: #64748b; line-height: 1.6; text-align: left;">
+            If you did not request a password reset, please ignore this email. Your password will remain unchanged.
+          </p>
+        </div>
+        <div style="max-width: 560px; margin: 24px auto 0; text-align: center; color: #94a3b8; font-size: 13px;">
+          <p style="margin: 0;">&copy; ${new Date().getFullYear()} PrimuxCare Management. All rights reserved.</p>
+        </div>
+      </div>
+    `;
+
+  if (isResendConfigured()) {
+    const response = await fetch(RESEND_API_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: `PrimuxCare <${getSenderEmail()}>`,
+        to: [email],
+        subject,
+        text,
+        html,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      const error = new Error(`Resend API error: ${response.status} ${errorText}`);
+      error.code = "RESEND_API_ERROR";
+      throw error;
+    }
+
+    return;
+  }
+
+  await getTransporter().sendMail({
+    from: `"PrimuxCare" <${getSenderEmail()}>`,
+    to: email,
+    subject,
+    text,
+    html,
+  });
+};
 
 export const getVerificationErrorMessage = (error) => {
   if (
