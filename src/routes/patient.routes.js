@@ -100,6 +100,49 @@ const buildExaminationSummary = ({
 
 const formatCardNumber = (sequence) => `P-${String(sequence).padStart(6, "0")}`;
 
+const parsePositiveInteger = (value, fallback) => {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const normalizeSortDirection = (value, fallback = "desc") =>
+  String(value || fallback).toLowerCase() === "asc" ? "asc" : "desc";
+
+const VALID_PATIENT_SORT_FIELDS = new Set([
+  "createdAt",
+  "name",
+  "age",
+  "cardNumber",
+]);
+
+const sortPatientsCollection = (
+  patients,
+  sortBy = "createdAt",
+  sortDirection = "desc",
+) => {
+  const directionMultiplier = sortDirection === "asc" ? 1 : -1;
+
+  return [...patients].sort((left, right) => {
+    let leftValue = left?.[sortBy];
+    let rightValue = right?.[sortBy];
+
+    if (sortBy === "age") {
+      leftValue = Number(leftValue) || 0;
+      rightValue = Number(rightValue) || 0;
+    } else if (sortBy === "createdAt") {
+      leftValue = new Date(leftValue).getTime() || 0;
+      rightValue = new Date(rightValue).getTime() || 0;
+    } else {
+      leftValue = String(leftValue || "").toLowerCase();
+      rightValue = String(rightValue || "").toLowerCase();
+    }
+
+    if (leftValue < rightValue) return -1 * directionMultiplier;
+    if (leftValue > rightValue) return 1 * directionMultiplier;
+    return 0;
+  });
+};
+
 const isPatientCardSequenceConflict = (error) =>
   error instanceof Prisma.PrismaClientKnownRequestError &&
   error.code === "P2002" &&
@@ -154,12 +197,91 @@ router.get(
   authorizeRoles("admin", "doctor", "nurse"),
   async (req, res) => {
     try {
+      const clinicId = req.user.clinicId;
+      const pageParam = req.query.page;
+      const limitParam = req.query.limit;
+      const search = normalizeText(req.query.search).toLowerCase();
+      const requestedSortBy = normalizeText(req.query.sortBy);
+      const sortBy = VALID_PATIENT_SORT_FIELDS.has(requestedSortBy)
+        ? requestedSortBy
+        : "createdAt";
+      const sortDirection = normalizeSortDirection(
+        req.query.sortDirection,
+        sortBy === "createdAt" ? "desc" : "asc",
+      );
+      const shouldPaginate =
+        pageParam !== undefined || limitParam !== undefined;
+
+      const baseWhere = { clinicId, isDeleted: false };
+
+      if (!shouldPaginate) {
+        const patients = await prisma.patient.findMany({
+          where: baseWhere,
+          orderBy: { createdAt: "desc" },
+        });
+
+        return res.json(patients.map(toDecryptedPatient));
+      }
+
+      const page = parsePositiveInteger(pageParam, 1);
+      const limit = Math.min(parsePositiveInteger(limitParam, 25), 100);
+      const skip = (page - 1) * limit;
+      const usesInMemorySearchOrSort =
+        Boolean(search) ||
+        ["name", "age", "cardNumber"].includes(sortBy);
+
+      if (!usesInMemorySearchOrSort) {
+        const [patients, total] = await Promise.all([
+          prisma.patient.findMany({
+            where: baseWhere,
+            orderBy: { createdAt: sortDirection },
+            skip,
+            take: limit,
+          }),
+          prisma.patient.count({ where: baseWhere }),
+        ]);
+
+        return res.json({
+          data: patients.map(toDecryptedPatient),
+          page,
+          limit,
+          total,
+          totalPages: Math.max(1, Math.ceil(total / limit)),
+        });
+      }
+
       const patients = await prisma.patient.findMany({
-        where: { clinicId: req.user.clinicId, isDeleted: false },
+        where: baseWhere,
         orderBy: { createdAt: "desc" },
       });
 
-      res.json(patients.map(toDecryptedPatient));
+      const filteredPatients = patients
+        .map(toDecryptedPatient)
+        .filter((patient) => {
+          if (!search) return true;
+
+          const searchableValues = [patient?.name, patient?.cardNumber]
+            .filter(Boolean)
+            .map((value) => String(value).toLowerCase());
+
+          return searchableValues.some((value) => value.includes(search));
+        });
+
+      const sortedPatients = sortPatientsCollection(
+        filteredPatients,
+        sortBy,
+        sortDirection,
+      );
+      const total = sortedPatients.length;
+      const paginatedPatients = sortedPatients.slice(skip, skip + limit);
+
+      return res.json({
+        data: paginatedPatients,
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      });
     } catch (error) {
       console.error("Get patients error:", error);
       res.status(500).json({ message: "Failed to fetch patients" });

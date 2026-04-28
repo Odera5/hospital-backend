@@ -26,6 +26,21 @@ const DEFAULT_PROCEDURE_PRESETS = [
   { description: "Dental X-Ray", category: "lab", unitPrice: 8000 },
   { description: "Medication Dispensing", category: "medication", unitPrice: 3500 },
 ];
+const isEmailVerificationRequired = () => {
+  const configuredValue = String(
+    process.env.EMAIL_VERIFICATION_REQUIRED || "",
+  ).toLowerCase();
+
+  if (configuredValue === "true") {
+    return true;
+  }
+
+  if (configuredValue === "false") {
+    return false;
+  }
+
+  return process.env.NODE_ENV === "production";
+};
 
 const normalizeProcedurePresetPrices = (value) => {
   const incoming =
@@ -647,7 +662,7 @@ router.post("/login", async (req, res) => {
     if (!user.isActive) {
       return res.status(403).json({ message: "Your staff account has been deactivated" });
     }
-    if (!user.emailVerified) {
+    if (isEmailVerificationRequired() && !user.emailVerified) {
       return res.status(403).json({
         message:
           "Please confirm your email address to activate your account before signing in.",

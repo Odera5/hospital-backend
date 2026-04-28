@@ -7,6 +7,7 @@
     "db:deploy": "prisma migrate deploy",
     "postinstall": "prisma generate",
     "start": "prisma migrate deploy && node src/server.js",
+    "start:local": "node src/server.js",
     "dev": "nodemon --watch src --watch .env src/server.js",
     "migrate:mongo": "node src/scripts/migrateMongoToPostgres.js"
   },
