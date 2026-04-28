@@ -50,6 +50,29 @@ const normalizeTeeth = (value) => {
 const normalizeAttachments = (attachments) =>
   Array.isArray(attachments) ? attachments : [];
 
+const normalizeAttachmentMetadataPayload = (value) => {
+  if (!value) return [];
+
+  let parsed = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+
+  if (!Array.isArray(parsed)) return [];
+
+  return parsed
+    .map((attachment) => ({
+      name: normalizeText(attachment?.name),
+      url: normalizeText(attachment?.url),
+      mimetype: normalizeText(attachment?.mimetype || attachment?.type),
+    }))
+    .filter((attachment) => attachment.name && attachment.url);
+};
+
 const normalizeBoolean = (value) => {
   if (typeof value === "boolean") return value;
   if (typeof value === "string") {
@@ -190,6 +213,69 @@ const getPatientOr404 = async (id, clinicId) => {
   if (!patient || patient.isDeleted) return null;
   return patient;
 };
+
+router.get(
+  "/picker",
+  protect,
+  authorizeRoles("admin", "doctor", "nurse"),
+  async (req, res) => {
+    try {
+      const clinicId = req.user.clinicId;
+      const search = normalizeText(req.query.search).toLowerCase();
+      const limit = Math.min(parsePositiveInteger(req.query.limit, 20), 100);
+
+      const baseWhere = { clinicId, isDeleted: false };
+      const selectedFields = {
+        id: true,
+        name: true,
+        cardNumber: true,
+        phone: true,
+        email: true,
+        createdAt: true,
+      };
+
+      const shouldSearch = Boolean(search);
+      const rawPatients = await prisma.patient.findMany({
+        where: baseWhere,
+        select: selectedFields,
+        orderBy: { createdAt: "desc" },
+        ...(shouldSearch ? {} : { take: limit }),
+      });
+
+      const options = rawPatients
+        .map((patient) => {
+          const decrypted = toDecryptedPatient(patient);
+          return {
+            id: decrypted.id,
+            name: decrypted.name,
+            cardNumber: decrypted.cardNumber,
+            phone: decrypted.phone,
+            email: decrypted.email,
+          };
+        })
+        .filter((patient) => {
+          if (!search) return true;
+
+          const searchableValues = [
+            patient?.name,
+            patient?.cardNumber,
+            patient?.phone,
+            patient?.email,
+          ]
+            .filter(Boolean)
+            .map((value) => String(value).toLowerCase());
+
+          return searchableValues.some((value) => value.includes(search));
+        })
+        .slice(0, limit);
+
+      res.json(options);
+    } catch (error) {
+      console.error("Get patient picker error:", error);
+      res.status(500).json({ message: "Failed to fetch patient options" });
+    }
+  },
+);
 
 router.get(
   "/",
@@ -646,13 +732,20 @@ router.post(
         consentNotes,
       });
 
-      const attachments = normalizeAttachments(
+      const uploadedAttachmentMetadata = normalizeAttachmentMetadataPayload(
+        req.body.attachmentsMetadata,
+      );
+      const newFileAttachments = normalizeAttachments(
         req.files?.map((file) => ({
           name: file.filename,
           url: buildAttachmentUrl(patient.id, file.filename),
           mimetype: file.mimetype,
         })),
       );
+      const attachments = normalizeAttachments([
+        ...uploadedAttachmentMetadata,
+        ...newFileAttachments,
+      ]);
 
       const record = await prisma.record.create({
         data: {
@@ -779,13 +872,25 @@ router.put(
         (attachment) => !removedNames.includes(attachment?.name),
       );
 
-      const newAttachments = normalizeAttachments(
+      const uploadedAttachmentMetadata = normalizeAttachmentMetadataPayload(
+        req.body.attachmentsMetadata,
+      );
+      const newFileAttachments = normalizeAttachments(
         req.files?.map((file) => ({
           name: file.filename,
           url: buildAttachmentUrl(patient.id, file.filename),
           mimetype: file.mimetype,
         })),
       );
+      const newAttachments = normalizeAttachments([
+        ...uploadedAttachmentMetadata.filter(
+          (attachment) =>
+            !retainedAttachments.some(
+              (retained) => retained?.name === attachment.name,
+            ),
+        ),
+        ...newFileAttachments,
+      ]);
 
       const updatedRecord = await prisma.record.update({
         where: { id: record.id },

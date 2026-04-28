@@ -22,6 +22,24 @@ const WORKING_HOURS = [
 ];
 
 const SLOT_MINUTES = 30;
+const appointmentPatientSelect = {
+  id: true,
+  clinicId: true,
+  isDeleted: true,
+  name: true,
+  cardNumber: true,
+  age: true,
+  email: true,
+  gender: true,
+  phone: true,
+  address: true,
+};
+const dentistSelect = {
+  id: true,
+  name: true,
+  email: true,
+  role: true,
+};
 
 const buildDateFilter = (startDate, endDate) => {
   if (!startDate && !endDate) return undefined;
@@ -142,14 +160,11 @@ export const getAllAppointments = async (req, res) => {
     const appointments = await prisma.appointment.findMany({
       where,
       include: {
-        patient: true,
+        patient: {
+          select: appointmentPatientSelect,
+        },
         dentist: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            role: true,
-          },
+          select: dentistSelect,
         },
       },
       orderBy: { appointmentDate: "asc" },
@@ -178,14 +193,11 @@ export const getAppointment = async (req, res) => {
         patient: { clinicId: req.user.clinicId, isDeleted: false },
       },
       include: {
-        patient: true,
+        patient: {
+          select: appointmentPatientSelect,
+        },
         dentist: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            role: true,
-          },
+          select: dentistSelect,
         },
       },
     });
@@ -290,14 +302,11 @@ export const createAppointment = async (req, res) => {
         duration: Number(duration) || 30,
       },
       include: {
-        patient: true,
+        patient: {
+          select: appointmentPatientSelect,
+        },
         dentist: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            role: true,
-          },
+          select: dentistSelect,
         },
       },
     });
@@ -437,14 +446,11 @@ export const updateAppointment = async (req, res) => {
         ...(duration ? { duration: Number(duration) } : {}),
       },
       include: {
-        patient: true,
+        patient: {
+          select: appointmentPatientSelect,
+        },
         dentist: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            role: true,
-          },
+          select: dentistSelect,
         },
       },
     });

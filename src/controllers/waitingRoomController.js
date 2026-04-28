@@ -9,6 +9,18 @@ const STATUS_TIMES = {
   in_consultation: "consultationStartedAt",
   completed: "completedAt",
 };
+const waitingPatientSelect = {
+  id: true,
+  clinicId: true,
+  isDeleted: true,
+  name: true,
+  cardNumber: true,
+  age: true,
+  email: true,
+  gender: true,
+  phone: true,
+  address: true,
+};
 
 const serializeWaitingResult = (entry) =>
   serializeWaitingEntry({
@@ -43,7 +55,11 @@ export const getWaitingList = async (req, res) => {
             }
           : {}),
       },
-      include: { patient: true },
+      include: {
+        patient: {
+          select: waitingPatientSelect,
+        },
+      },
       orderBy: [{ arrivalTime: "asc" }],
     });
 
@@ -60,19 +76,23 @@ export const getWaitingSummary = async (req, res) => {
       patient: { clinicId: req.user.clinicId, isDeleted: false },
     };
 
-    const [waiting, called, inConsultation, completed, total] = await Promise.all([
-      prisma.waitingRoom.count({ where: { ...baseWhere, status: "waiting" } }),
-      prisma.waitingRoom.count({ where: { ...baseWhere, status: "called" } }),
-      prisma.waitingRoom.count({ where: { ...baseWhere, status: "in_consultation" } }),
-      prisma.waitingRoom.count({ where: { ...baseWhere, status: "completed" } }),
+    const [statusGroups, total] = await Promise.all([
+      prisma.waitingRoom.groupBy({
+        by: ["status"],
+        where: baseWhere,
+        _count: { _all: true },
+      }),
       prisma.waitingRoom.count({ where: baseWhere }),
     ]);
 
+    const getStatusCount = (targetStatus) =>
+      statusGroups.find((group) => group.status === targetStatus)?._count._all || 0;
+
     res.json({
-      waiting,
-      called,
-      in_consultation: inConsultation,
-      completed,
+      waiting: getStatusCount("waiting"),
+      called: getStatusCount("called"),
+      in_consultation: getStatusCount("in_consultation"),
+      completed: getStatusCount("completed"),
       total,
     });
   } catch (error) {
@@ -120,7 +140,11 @@ export const createWaitingEntry = async (req, res) => {
           patientName: decryptedPatient.name,
           notes: notes?.trim() || "",
         },
-        include: { patient: true },
+        include: {
+          patient: {
+            select: waitingPatientSelect,
+          },
+        },
       }),
       prisma.appointment.updateMany({
         where: {
@@ -160,7 +184,11 @@ export const updateWaitingEntry = async (req, res) => {
     const { status, notes } = req.body;
     const item = await prisma.waitingRoom.findUnique({
       where: { id: req.params.id },
-      include: { patient: true },
+      include: {
+        patient: {
+          select: waitingPatientSelect,
+        },
+      },
     });
 
     if (!item || item.patient.clinicId !== req.user.clinicId) {
@@ -190,7 +218,11 @@ export const updateWaitingEntry = async (req, res) => {
     const updatedItem = await prisma.waitingRoom.update({
       where: { id: item.id },
       data: updateData,
-      include: { patient: true },
+      include: {
+        patient: {
+          select: waitingPatientSelect,
+        },
+      },
     });
 
     await logAuditEvent(req, {

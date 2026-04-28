@@ -55,12 +55,8 @@ router.get(
         trashCount,
         appointmentsToday,
         scheduledAppointments,
-        waiting,
-        called,
-        inConsultation,
-        completed,
+        waitingStatusGroups,
         totalWaiting,
-        activeWaiting,
         revenueAggregate,
       ] = await Promise.all([
         prisma.patient.count({ where: patientWhere }),
@@ -89,37 +85,12 @@ router.get(
             status: "scheduled",
           },
         }),
-        prisma.waitingRoom.count({
-          where: {
-            ...waitingClinicWhere,
-            status: "waiting",
-          },
-        }),
-        prisma.waitingRoom.count({
-          where: {
-            ...waitingClinicWhere,
-            status: "called",
-          },
-        }),
-        prisma.waitingRoom.count({
-          where: {
-            ...waitingClinicWhere,
-            status: "in_consultation",
-          },
-        }),
-        prisma.waitingRoom.count({
-          where: {
-            ...waitingClinicWhere,
-            status: "completed",
-          },
+        prisma.waitingRoom.groupBy({
+          by: ["status"],
+          where: waitingClinicWhere,
+          _count: { _all: true },
         }),
         prisma.waitingRoom.count({ where: waitingClinicWhere }),
-        prisma.waitingRoom.count({
-          where: {
-            ...waitingClinicWhere,
-            status: { in: ["waiting", "called"] },
-          },
-        }),
         prisma.invoice.aggregate({
           where: invoiceClinicWhere,
           _sum: {
@@ -127,6 +98,14 @@ router.get(
           },
         }),
       ]);
+
+      const getWaitingCount = (targetStatus) =>
+        waitingStatusGroups.find((group) => group.status === targetStatus)?._count._all || 0;
+      const waiting = getWaitingCount("waiting");
+      const called = getWaitingCount("called");
+      const inConsultation = getWaitingCount("in_consultation");
+      const completed = getWaitingCount("completed");
+      const activeWaiting = waiting + called;
 
       return res.json({
         patients: {

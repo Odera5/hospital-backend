@@ -4,6 +4,19 @@ import { logAuditEvent } from "../services/auditLog.js";
 import { serializeInvoice } from "../utils/serializers.js";
 import { toDecryptedPatient } from "../utils/patientCrypto.js";
 
+const invoicePatientSelect = {
+  id: true,
+  clinicId: true,
+  isDeleted: true,
+  name: true,
+  cardNumber: true,
+  age: true,
+  email: true,
+  gender: true,
+  phone: true,
+  address: true,
+};
+
 const normalizeItems = (items) =>
   Array.isArray(items)
     ? items.map((item) => ({
@@ -72,7 +85,9 @@ const generateInvoiceNumber = async () => {
 };
 
 const invoiceInclude = {
-  patient: true,
+  patient: {
+    select: invoicePatientSelect,
+  },
 };
 
 const serializeInvoiceResult = (invoice) =>
@@ -419,36 +434,48 @@ export const recordPayment = async (req, res) => {
 export const getInvoiceReport = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-
-    const invoices = await prisma.invoice.findMany({
-      where: {
-        patient: {
-          clinicId: req.user.clinicId,
-        },
-        status: { not: "draft" },
-        ...((startDate || endDate)
-          ? {
-              invoiceDate: {
-                ...(startDate ? { gte: new Date(startDate) } : {}),
-                ...(endDate ? { lte: new Date(endDate) } : {}),
-              },
-            }
-          : {}),
+    const invoiceWhere = {
+      patient: {
+        clinicId: req.user.clinicId,
       },
-    });
+      status: { not: "draft" },
+      ...((startDate || endDate)
+        ? {
+            invoiceDate: {
+              ...(startDate ? { gte: new Date(startDate) } : {}),
+              ...(endDate ? { lte: new Date(endDate) } : {}),
+            },
+          }
+        : {}),
+    };
+
+    const [invoiceAggregate, statusGroups] = await Promise.all([
+      prisma.invoice.aggregate({
+        where: invoiceWhere,
+        _count: { _all: true },
+        _sum: {
+          total: true,
+          amountPaid: true,
+          balance: true,
+        },
+      }),
+      prisma.invoice.groupBy({
+        by: ["status"],
+        where: invoiceWhere,
+        _count: { _all: true },
+      }),
+    ]);
+
+    const getStatusCount = (targetStatus) =>
+      statusGroups.find((group) => group.status === targetStatus)?._count._all || 0;
 
     const report = {
-      totalInvoices: invoices.length,
-      totalRevenue: invoices.reduce((sum, invoice) => sum + invoice.total, 0),
-      totalPaid: invoices.reduce((sum, invoice) => sum + invoice.amountPaid, 0),
-      totalOutstanding: invoices.reduce(
-        (sum, invoice) => sum + invoice.balance,
-        0,
-      ),
-      paidInvoices: invoices.filter((invoice) => invoice.status === "paid")
-        .length,
-      overdueInvoices: invoices.filter((invoice) => invoice.status === "overdue")
-        .length,
+      totalInvoices: invoiceAggregate._count._all || 0,
+      totalRevenue: invoiceAggregate._sum.total || 0,
+      totalPaid: invoiceAggregate._sum.amountPaid || 0,
+      totalOutstanding: invoiceAggregate._sum.balance || 0,
+      paidInvoices: getStatusCount("paid"),
+      overdueInvoices: getStatusCount("overdue"),
     };
 
     res.json(report);
