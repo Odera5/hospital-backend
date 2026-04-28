@@ -25,16 +25,20 @@ export const serializeInvoice = (invoice) => ({
       : invoice.patientId,
 });
 
-export const serializeAppointment = (appointment) => ({
-  id: appointment.id || appointment._id,
-  _id: appointment.id || appointment._id,
-  ...appointment,
+export const serializeAppointment = (appointment) => {
+  const { patientResponseToken, ...safeAppointment } = appointment || {};
+
+  return {
+  id: safeAppointment.id || safeAppointment._id,
+  _id: safeAppointment.id || safeAppointment._id,
+  ...safeAppointment,
   patientId:
-    appointment.patientId && typeof appointment.patientId === "object"
-      ? toDecryptedPatient(appointment.patientId)
-      : appointment.patientId,
-  dentistId: appointment.dentistId || null,
-});
+    safeAppointment.patientId && typeof safeAppointment.patientId === "object"
+      ? toDecryptedPatient(safeAppointment.patientId)
+      : safeAppointment.patientId,
+  dentistId: safeAppointment.dentistId || null,
+};
+};
 
 export const serializeWaitingEntry = (entry) => ({
   id: entry.id || entry._id,

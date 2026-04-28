@@ -16,6 +16,7 @@ import dashboardRoutes from "./routes/dashboard.routes.js";
 import { apiLimiter } from "./middleware/rateLimit.js";
 import { logger } from "./middleware/logger.js";
 import { handlePaystackWebhook } from "./controllers/billingController.js";
+import { startAppointmentReminderWorker } from "./services/appointmentReminderService.js";
 import path from "path";
 import fs from "fs";
 
@@ -149,6 +150,7 @@ const startServer = async () => {
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
     });
+    startAppointmentReminderWorker();
   } catch (err) {
     console.error("Failed to start server:", err);
   }

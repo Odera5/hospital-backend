@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { prisma } from "../lib/prisma.js";
 import { serializeAppointment } from "../utils/serializers.js";
 import { toDecryptedPatient } from "../utils/patientCrypto.js";
@@ -22,6 +23,7 @@ const WORKING_HOURS = [
 ];
 
 const SLOT_MINUTES = 30;
+const ACTIVE_PAYSTACK_STATUSES = ["active", "attention", "success"];
 const appointmentPatientSelect = {
   id: true,
   clinicId: true,
@@ -39,6 +41,27 @@ const dentistSelect = {
   name: true,
   email: true,
   role: true,
+};
+
+const parseReminderEnabled = (value) =>
+  value === true || String(value || "").toLowerCase() === "true";
+
+const clinicHasReminderAccess = (clinic) => {
+  if (!clinic || clinic.plan !== "PRO") return false;
+
+  const hasActivePaidSubscription = ACTIVE_PAYSTACK_STATUSES.includes(
+    String(clinic.paystackSubscriptionStatus || "").toLowerCase(),
+  );
+
+  if (
+    clinic.subscriptionEnds &&
+    new Date(clinic.subscriptionEnds) < new Date() &&
+    !hasActivePaidSubscription
+  ) {
+    return false;
+  }
+
+  return true;
 };
 
 const buildDateFilter = (startDate, endDate) => {
@@ -80,6 +103,112 @@ const getAppointmentRange = (timeSlot, duration = SLOT_MINUTES) => {
     end: start + safeDuration,
   };
 };
+
+const getAppointmentStartDateTime = (appointmentDate, timeSlot) => {
+  const date = new Date(appointmentDate);
+  if (Number.isNaN(date.getTime())) return null;
+
+  const [hours, minutes] = String(timeSlot || "")
+    .split(":")
+    .map((value) => Number(value));
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+
+  date.setHours(hours, minutes, 0, 0);
+  return date;
+};
+
+const getReminderPlanError = () =>
+  "Automated reminders require an active Pro plan or trial.";
+
+const getReminderContactError = () =>
+  "Patient phone number or email is required before automated reminders can be sent.";
+
+const getReminderPhoneError = () =>
+  "Patient phone number is required before automated reminders can be sent.";
+
+const getReminderInvalidPhoneError = () =>
+  "Patient phone number must be in international format, for example +2348012345678.";
+
+const isLikelyE164PhoneNumber = (value) =>
+  /^\+[1-9]\d{7,14}$/.test(String(value || "").trim());
+
+const createAppointmentResponseToken = () =>
+  crypto.randomBytes(24).toString("hex");
+
+const buildReminderUpdate = ({
+  requestedReminderEnabled,
+  clinic,
+  patientEmail,
+  patientPhone,
+  appointmentDate,
+  timeSlot,
+  nextStatus = "scheduled",
+  resetSchedule = false,
+}) => {
+  const hasReminderAccess = clinicHasReminderAccess(clinic);
+  const appointmentStart = getAppointmentStartDateTime(appointmentDate, timeSlot);
+  const normalizedPatientEmail = String(patientEmail || "").trim();
+  const normalizedPatientPhone = String(patientPhone || "").trim();
+  const hasPatientEmail = Boolean(normalizedPatientEmail);
+  const hasPatientPhone = Boolean(normalizedPatientPhone);
+  const hasValidPatientPhone = isLikelyE164PhoneNumber(normalizedPatientPhone);
+  const hasReachableContact = hasPatientEmail || hasValidPatientPhone;
+  const canScheduleReminder =
+    Boolean(requestedReminderEnabled) &&
+    nextStatus === "scheduled" &&
+    hasReminderAccess &&
+    hasReachableContact &&
+    appointmentStart &&
+    appointmentStart > new Date();
+
+  const update = {
+    reminderEnabled: canScheduleReminder,
+    reminderStatus: canScheduleReminder
+      ? "scheduled"
+      : nextStatus !== "scheduled"
+        ? "disabled"
+        : requestedReminderEnabled && !hasReminderAccess
+          ? "plan_locked"
+          : requestedReminderEnabled && !hasPatientEmail && !hasPatientPhone
+            ? "no_contact"
+          : requestedReminderEnabled && !hasPatientEmail && hasPatientPhone && !hasValidPatientPhone
+            ? "invalid_phone"
+          : requestedReminderEnabled && !hasPatientEmail && !hasValidPatientPhone
+            ? "no_contact"
+            : requestedReminderEnabled && !hasValidPatientPhone
+              ? "invalid_phone"
+            : "disabled",
+    reminderLastError: canScheduleReminder
+      ? ""
+      : requestedReminderEnabled && !hasReminderAccess
+        ? getReminderPlanError()
+        : requestedReminderEnabled && !hasPatientEmail && !hasPatientPhone
+          ? getReminderContactError()
+          : requestedReminderEnabled && !hasPatientEmail && hasPatientPhone && !hasValidPatientPhone
+            ? getReminderInvalidPhoneError()
+          : requestedReminderEnabled && !hasPatientEmail && !hasValidPatientPhone
+            ? getReminderContactError()
+          : requestedReminderEnabled && !hasValidPatientPhone
+            ? getReminderInvalidPhoneError()
+          : "",
+  };
+
+  if (resetSchedule) {
+    update.reminder24hSentAt = null;
+    update.reminder2hSentAt = null;
+    update.reminderLastSentAt = null;
+  }
+
+  return update;
+};
+
+const buildConfirmationUpdate = ({
+  currentStatus = "pending",
+  reset = false,
+}) => ({
+  patientConfirmationStatus: reset ? "pending" : currentStatus || "pending",
+  patientConfirmationRespondedAt: reset ? null : undefined,
+});
 
 const isSlotAvailableForDuration = (slot, duration, appointments, excludedId = null) => {
   const candidateRange = getAppointmentRange(slot, duration);
@@ -229,6 +358,7 @@ export const createAppointment = async (req, res) => {
       dentistId,
       notes,
       duration,
+      reminderEnabled,
     } = req.body;
 
     if (!patientId || !appointmentDate || !timeSlot) {
@@ -242,6 +372,21 @@ export const createAppointment = async (req, res) => {
     });
     if (!patient || patient.isDeleted) {
       return res.status(404).json({ message: "Patient not found" });
+    }
+
+    const clinic = await prisma.clinic.findUnique({
+      where: { id: req.user.clinicId },
+      select: {
+        id: true,
+        name: true,
+        plan: true,
+        subscriptionEnds: true,
+        paystackSubscriptionStatus: true,
+      },
+    });
+
+    if (!clinic) {
+      return res.status(404).json({ message: "Clinic not found" });
     }
 
     if (dentistId) {
@@ -300,6 +445,18 @@ export const createAppointment = async (req, res) => {
         dentistId: dentistId || null,
         notes: notes || "",
         duration: Number(duration) || 30,
+        patientResponseToken: createAppointmentResponseToken(),
+        ...buildConfirmationUpdate({ reset: true }),
+        ...buildReminderUpdate({
+          requestedReminderEnabled: parseReminderEnabled(reminderEnabled),
+          clinic,
+          patientEmail: toDecryptedPatient(patient)?.email,
+          patientPhone: toDecryptedPatient(patient)?.phone,
+          appointmentDate,
+          timeSlot,
+          nextStatus: "scheduled",
+          resetSchedule: true,
+        }),
       },
       include: {
         patient: {
@@ -334,6 +491,7 @@ export const updateAppointment = async (req, res) => {
       notes,
       dentistId,
       duration,
+      reminderEnabled,
     } = req.body;
 
     const appointment = await prisma.appointment.findUnique({
@@ -343,6 +501,21 @@ export const updateAppointment = async (req, res) => {
 
     if (!appointment || appointment.patient.clinicId !== req.user.clinicId) {
       return res.status(404).json({ message: "Appointment not found" });
+    }
+
+    const clinic = await prisma.clinic.findUnique({
+      where: { id: req.user.clinicId },
+      select: {
+        id: true,
+        name: true,
+        plan: true,
+        subscriptionEnds: true,
+        paystackSubscriptionStatus: true,
+      },
+    });
+
+    if (!clinic) {
+      return res.status(404).json({ message: "Clinic not found" });
     }
 
     if (req.user.role === "nurse" && status === "completed") {
@@ -434,6 +607,41 @@ export const updateAppointment = async (req, res) => {
       }
     }
 
+    const nextAppointmentDate = appointmentDate || appointment.appointmentDate;
+    const nextTimeSlot = timeSlot || appointment.timeSlot;
+    const nextStatus = status || appointment.status;
+    const shouldReevaluateReminder =
+      reminderEnabled !== undefined ||
+      Boolean(appointmentDate) ||
+      Boolean(timeSlot) ||
+      Boolean(status);
+    const shouldResetPatientConfirmation =
+      Boolean(appointmentDate) ||
+      Boolean(timeSlot) ||
+      appointmentType !== undefined ||
+      duration !== undefined;
+    const nextReminderPreference =
+      reminderEnabled !== undefined
+        ? parseReminderEnabled(reminderEnabled)
+        : appointment.reminderEnabled;
+
+    const reminderUpdate = shouldReevaluateReminder
+        ? buildReminderUpdate({
+          requestedReminderEnabled: nextReminderPreference,
+          clinic,
+          patientEmail: toDecryptedPatient(appointment.patient)?.email,
+          patientPhone: toDecryptedPatient(appointment.patient)?.phone,
+          appointmentDate: nextAppointmentDate,
+          timeSlot: nextTimeSlot,
+          nextStatus,
+          resetSchedule:
+            reminderEnabled !== undefined ||
+            Boolean(appointmentDate) ||
+            Boolean(timeSlot) ||
+            nextStatus !== appointment.status,
+        })
+      : {};
+
     const updatedAppointment = await prisma.appointment.update({
       where: { id: appointment.id },
       data: {
@@ -444,6 +652,10 @@ export const updateAppointment = async (req, res) => {
         ...(notes !== undefined ? { notes } : {}),
         ...(dentistId !== undefined ? { dentistId: dentistId || null } : {}),
         ...(duration ? { duration: Number(duration) } : {}),
+        ...(shouldResetPatientConfirmation
+          ? buildConfirmationUpdate({ reset: true })
+          : {}),
+        ...reminderUpdate,
       },
       include: {
         patient: {
@@ -490,6 +702,92 @@ export const deleteAppointment = async (req, res) => {
     res.json({ message: "Appointment cancelled" });
   } catch (error) {
     console.error("Delete appointment error:", error.message);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+export const respondToAppointment = async (req, res) => {
+  try {
+    const token = String(req.body?.token || req.query?.token || "").trim();
+    const action = String(req.body?.action || req.query?.action || "").trim().toLowerCase();
+
+    if (!token) {
+      return res.status(400).json({ message: "Response token is required" });
+    }
+
+    if (!["confirm", "reschedule"].includes(action)) {
+      return res.status(400).json({ message: "Invalid response action" });
+    }
+
+    const appointment = await prisma.appointment.findUnique({
+      where: { patientResponseToken: token },
+      include: {
+        patient: {
+          select: {
+            id: true,
+            clinicId: true,
+            isDeleted: true,
+            name: true,
+            cardNumber: true,
+            age: true,
+            email: true,
+            gender: true,
+            phone: true,
+            address: true,
+            clinic: {
+              select: {
+                id: true,
+                name: true,
+              },
+            },
+          },
+        },
+        dentist: {
+          select: dentistSelect,
+        },
+      },
+    });
+
+    if (!appointment || appointment.patient?.isDeleted) {
+      return res.status(404).json({ message: "Appointment not found" });
+    }
+
+    if (appointment.status !== "scheduled") {
+      return res.status(400).json({
+        message: "This appointment is no longer open for patient confirmation.",
+      });
+    }
+
+    const updatedAppointment = await prisma.appointment.update({
+      where: { id: appointment.id },
+      data: {
+        patientConfirmationStatus:
+          action === "confirm" ? "confirmed" : "reschedule_requested",
+        patientConfirmationRespondedAt: new Date(),
+      },
+      include: {
+        patient: {
+          select: appointmentPatientSelect,
+        },
+        dentist: {
+          select: dentistSelect,
+        },
+      },
+    });
+
+    return res.json({
+      message:
+        action === "confirm"
+          ? "Appointment confirmed successfully."
+          : "Reschedule request received successfully.",
+      appointment: serializeAppointment({
+        ...updatedAppointment,
+        patientId: toDecryptedPatient(updatedAppointment.patient),
+        dentistId: updatedAppointment.dentist,
+      }),
+    });
+  } catch (error) {
+    console.error("Respond to appointment error:", error.message);
     res.status(500).json({ message: "Server error" });
   }
 };

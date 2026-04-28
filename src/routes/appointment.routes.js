@@ -7,9 +7,12 @@ import {
   updateAppointment,
   deleteAppointment,
   getAvailableSlots,
+  respondToAppointment,
 } from "../controllers/appointmentController.js";
 
 const router = express.Router();
+
+router.post("/respond", respondToAppointment);
 
 // All routes require authentication
 router.use(verifyToken);
