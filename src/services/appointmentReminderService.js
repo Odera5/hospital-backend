@@ -37,6 +37,64 @@ const isSmsConfigured = () =>
 const hasReminderDeliveryConfigured = () =>
   isEmailConfigured() || isSmsConfigured();
 
+const getReminderDeliveryUnavailableError = ({
+  hasEmail,
+  hasPhone,
+  hasValidPhone,
+}) => {
+  if (isEmailConfigured() && isSmsConfigured()) {
+    if (!hasEmail && !hasPhone) {
+      return {
+        status: "no_contact",
+        message:
+          "Patient phone number or email is required for automated reminders.",
+      };
+    }
+
+    if (!hasEmail && hasPhone && !hasValidPhone) {
+      return {
+        status: "invalid_phone",
+        message:
+          "Patient phone number must be in international format, for example +2348012345678.",
+      };
+    }
+
+    return {
+      status: "delivery_unavailable",
+      message: "No configured reminder channel is available for this patient.",
+    };
+  }
+
+  if (isEmailConfigured()) {
+    return {
+      status: "no_email",
+      message: "Patient email is required for automated reminders.",
+    };
+  }
+
+  if (isSmsConfigured()) {
+    if (!hasPhone) {
+      return {
+        status: "no_phone",
+        message: "Patient phone number is required for automated reminders.",
+      };
+    }
+
+    if (!hasValidPhone) {
+      return {
+        status: "invalid_phone",
+        message:
+          "Patient phone number must be in international format, for example +2348012345678.",
+      };
+    }
+  }
+
+  return {
+    status: "delivery_unavailable",
+    message: "Reminder delivery is not configured yet.",
+  };
+};
+
 const getSenderEmail = () =>
   process.env.EMAIL_FROM?.trim() || process.env.SMTP_FROM_EMAIL?.trim() || "";
 
@@ -491,18 +549,16 @@ export const processAppointmentReminders = async () => {
         const hasValidPhone =
           hasPhone && isLikelyE164PhoneNumber(patient.phone);
 
+        const unavailableResult = getReminderDeliveryUnavailableError({
+          hasEmail,
+          hasPhone,
+          hasValidPhone,
+        });
+
         await markReminderDisabled(
           appointment.id,
-          !hasEmail && !hasPhone
-            ? "no_contact"
-            : !hasEmail && hasPhone && !hasValidPhone
-              ? "invalid_phone"
-              : "delivery_unavailable",
-          !hasEmail && !hasPhone
-            ? "Patient phone number or email is required for automated reminders."
-            : !hasEmail && hasPhone && !hasValidPhone
-              ? "Patient phone number must be in international format, for example +2348012345678."
-              : "No configured reminder channel is available for this patient.",
+          unavailableResult.status,
+          unavailableResult.message,
         );
         continue;
       }
@@ -601,7 +657,7 @@ export const startAppointmentReminderWorker = () => {
   if (reminderIntervalId || !hasReminderDeliveryConfigured()) {
     if (!hasReminderDeliveryConfigured()) {
       console.log(
-        "Appointment reminder worker not started: email or SMS delivery is not configured.",
+        "Appointment reminder worker not started: reminder delivery is not configured.",
       );
     }
     return;

@@ -120,11 +120,43 @@ const getAppointmentStartDateTime = (appointmentDate, timeSlot) => {
 const getReminderPlanError = () =>
   "Automated reminders require an active Pro plan or trial.";
 
-const getReminderContactError = () =>
-  "Patient phone number or email is required before automated reminders can be sent.";
+const isResendConfigured = () =>
+  Boolean(process.env.RESEND_API_KEY?.trim() && process.env.EMAIL_FROM?.trim());
 
-const getReminderPhoneError = () =>
-  "Patient phone number is required before automated reminders can be sent.";
+const isMailConfigured = () =>
+  Boolean(
+    process.env.SMTP_HOST?.trim() &&
+      process.env.SMTP_PORT?.trim() &&
+      process.env.SMTP_USER?.trim() &&
+      process.env.SMTP_PASS?.trim() &&
+      process.env.SMTP_FROM_EMAIL?.trim(),
+  );
+
+const isEmailConfigured = () => isResendConfigured() || isMailConfigured();
+
+const isSmsConfigured = () =>
+  Boolean(
+    process.env.TWILIO_ACCOUNT_SID?.trim() &&
+      process.env.TWILIO_AUTH_TOKEN?.trim() &&
+      (process.env.TWILIO_MESSAGING_SERVICE_SID?.trim() ||
+        process.env.TWILIO_PHONE_NUMBER?.trim()),
+  );
+
+const getReminderContactError = () => {
+  if (isEmailConfigured() && isSmsConfigured()) {
+    return "Patient phone number or email is required before automated reminders can be sent.";
+  }
+
+  if (isEmailConfigured()) {
+    return "Patient email is required before automated reminders can be sent.";
+  }
+
+  if (isSmsConfigured()) {
+    return "Patient phone number is required before automated reminders can be sent.";
+  }
+
+  return "Reminder delivery is not configured yet.";
+};
 
 const getReminderInvalidPhoneError = () =>
   "Patient phone number must be in international format, for example +2348012345678.";
@@ -152,7 +184,11 @@ const buildReminderUpdate = ({
   const hasPatientEmail = Boolean(normalizedPatientEmail);
   const hasPatientPhone = Boolean(normalizedPatientPhone);
   const hasValidPatientPhone = isLikelyE164PhoneNumber(normalizedPatientPhone);
-  const hasReachableContact = hasPatientEmail || hasValidPatientPhone;
+  const canUseEmail = isEmailConfigured() && hasPatientEmail;
+  const canUseSms = isSmsConfigured() && hasValidPatientPhone;
+  const needsOnlyEmail = isEmailConfigured() && !isSmsConfigured();
+  const needsOnlySms = !isEmailConfigured() && isSmsConfigured();
+  const hasReachableContact = canUseEmail || canUseSms;
   const canScheduleReminder =
     Boolean(requestedReminderEnabled) &&
     nextStatus === "scheduled" &&
@@ -169,26 +205,38 @@ const buildReminderUpdate = ({
         ? "disabled"
         : requestedReminderEnabled && !hasReminderAccess
           ? "plan_locked"
-          : requestedReminderEnabled && !hasPatientEmail && !hasPatientPhone
-            ? "no_contact"
-          : requestedReminderEnabled && !hasPatientEmail && hasPatientPhone && !hasValidPatientPhone
+          : requestedReminderEnabled && !hasReachableContact && needsOnlyEmail
+            ? "no_email"
+          : requestedReminderEnabled && !hasReachableContact && needsOnlySms && !hasPatientPhone
+            ? "no_phone"
+          : requestedReminderEnabled && !hasReachableContact && needsOnlySms && hasPatientPhone && !hasValidPatientPhone
             ? "invalid_phone"
-          : requestedReminderEnabled && !hasPatientEmail && !hasValidPatientPhone
+          : requestedReminderEnabled && !hasReachableContact && !hasPatientEmail && !hasPatientPhone
             ? "no_contact"
-            : requestedReminderEnabled && !hasValidPatientPhone
+          : requestedReminderEnabled && !hasReachableContact && !hasPatientEmail && hasPatientPhone && !hasValidPatientPhone
+            ? "invalid_phone"
+          : requestedReminderEnabled && !hasReachableContact && !hasPatientEmail && !hasValidPatientPhone
+            ? "no_contact"
+            : requestedReminderEnabled && !hasReachableContact && hasPatientPhone && !hasValidPatientPhone
               ? "invalid_phone"
             : "disabled",
     reminderLastError: canScheduleReminder
       ? ""
       : requestedReminderEnabled && !hasReminderAccess
         ? getReminderPlanError()
-        : requestedReminderEnabled && !hasPatientEmail && !hasPatientPhone
+        : requestedReminderEnabled && !hasReachableContact && needsOnlyEmail
           ? getReminderContactError()
-          : requestedReminderEnabled && !hasPatientEmail && hasPatientPhone && !hasValidPatientPhone
-            ? getReminderInvalidPhoneError()
-          : requestedReminderEnabled && !hasPatientEmail && !hasValidPatientPhone
+          : requestedReminderEnabled && !hasReachableContact && needsOnlySms && !hasPatientPhone
             ? getReminderContactError()
-          : requestedReminderEnabled && !hasValidPatientPhone
+          : requestedReminderEnabled && !hasReachableContact && needsOnlySms && hasPatientPhone && !hasValidPatientPhone
+            ? getReminderInvalidPhoneError()
+          : requestedReminderEnabled && !hasReachableContact && !hasPatientEmail && !hasPatientPhone
+          ? getReminderContactError()
+          : requestedReminderEnabled && !hasReachableContact && !hasPatientEmail && hasPatientPhone && !hasValidPatientPhone
+            ? getReminderInvalidPhoneError()
+          : requestedReminderEnabled && !hasReachableContact && !hasPatientEmail && !hasValidPatientPhone
+            ? getReminderContactError()
+          : requestedReminderEnabled && !hasReachableContact && hasPatientPhone && !hasValidPatientPhone
             ? getReminderInvalidPhoneError()
           : "",
   };
