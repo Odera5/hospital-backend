@@ -56,6 +56,25 @@ model Patient {
   @@unique([clinicId, cardNumberSequence])
 }
 
+model PendingIntake {
+  id             String    @id @default(cuid())
+  clinicId       String
+  name           String
+  age            String
+  gender         String    @default("other")
+  phone          String    @default("")
+  email          String    @default("")
+  address        String    @default("")
+  preferredDate  DateTime?
+  preferredTime  String    @default("")
+  status         String    @default("pending") // pending, approved, rejected
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  clinic         Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId, status, createdAt])
+}
+
 model Clinic {
   id             String    @id @default(cuid())
   name           String
@@ -71,9 +90,12 @@ model Clinic {
   updatedAt      DateTime  @updatedAt
   users          User[]
   patients       Patient[]
+  pendingIntakes PendingIntake[]
   plan           PlanType  @default(FREE)
   logoUrl        String?
   brandColor     String?
+  intakeEnabled  Boolean   @default(false)
+  intakePublicToken String? @unique
   stripeCustomerId String?
   paystackCustomerCode String?
   paystackPlanCode String?

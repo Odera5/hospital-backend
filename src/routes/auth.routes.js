@@ -74,6 +74,8 @@ const serializeClinic = (clinic) =>
         plan: clinic.plan || "FREE",
         logoUrl: clinic.logoUrl || null,
         brandColor: clinic.brandColor || null,
+        intakeEnabled: Boolean(clinic.intakeEnabled),
+        intakePublicToken: clinic.intakePublicToken || null,
         subscriptionEnds: clinic.subscriptionEnds || null,
         paystackCustomerCode: clinic.paystackCustomerCode || null,
         paystackPlanCode: clinic.paystackPlanCode || null,
@@ -128,6 +130,9 @@ const refreshVerificationForUser = async (user) => {
 
   return updatedUser;
 };
+
+const createIntakePublicToken = () =>
+  crypto.randomBytes(24).toString("hex");
 
 const hasActivePaidSubscription = (clinic) => {
   return ACTIVE_PAYSTACK_SUBSCRIPTION_STATUSES.includes(
@@ -245,6 +250,75 @@ router.put("/clinic-profile", protect, authorizeRoles("admin"), async (req, res)
   } catch (error) {
     console.error("Update clinic profile error:", error);
     res.status(500).json({ message: "Failed to update clinic profile" });
+  }
+});
+
+router.put("/clinic-profile/intake-link", protect, authorizeRoles("admin"), async (req, res) => {
+  try {
+    const requestedEnabled = req.body?.intakeEnabled;
+
+    if (typeof requestedEnabled !== "boolean") {
+      return res.status(400).json({ message: "intakeEnabled must be provided as true or false" });
+    }
+
+    const existingClinic = await prisma.clinic.findUnique({
+      where: { id: req.user.clinicId },
+    });
+
+    if (!existingClinic) {
+      return res.status(404).json({ message: "Clinic profile not found" });
+    }
+
+    const intakePublicToken =
+      requestedEnabled && !existingClinic.intakePublicToken
+        ? createIntakePublicToken()
+        : existingClinic.intakePublicToken;
+
+    const clinic = await prisma.clinic.update({
+      where: { id: req.user.clinicId },
+      data: {
+        intakeEnabled: requestedEnabled,
+        intakePublicToken,
+      },
+    });
+
+    res.json({
+      message: requestedEnabled
+        ? "Patient intake link enabled successfully"
+        : "Patient intake link disabled successfully",
+      clinic: serializeClinic(clinic),
+    });
+  } catch (error) {
+    console.error("Update intake link settings error:", error);
+    res.status(500).json({ message: "Failed to update patient intake link settings" });
+  }
+});
+
+router.post("/clinic-profile/intake-link/regenerate", protect, authorizeRoles("admin"), async (req, res) => {
+  try {
+    const existingClinic = await prisma.clinic.findUnique({
+      where: { id: req.user.clinicId },
+    });
+
+    if (!existingClinic) {
+      return res.status(404).json({ message: "Clinic profile not found" });
+    }
+
+    const clinic = await prisma.clinic.update({
+      where: { id: req.user.clinicId },
+      data: {
+        intakeEnabled: true,
+        intakePublicToken: createIntakePublicToken(),
+      },
+    });
+
+    res.json({
+      message: "Patient intake link regenerated successfully",
+      clinic: serializeClinic(clinic),
+    });
+  } catch (error) {
+    console.error("Regenerate intake link error:", error);
+    res.status(500).json({ message: "Failed to regenerate patient intake link" });
   }
 });
 

@@ -58,6 +58,7 @@ router.get(
         waitingStatusGroups,
         totalWaiting,
         revenueAggregate,
+        pendingIntakesCount,
       ] = await Promise.all([
         prisma.patient.count({ where: patientWhere }),
         prisma.patient.count({
@@ -97,6 +98,9 @@ router.get(
             total: true,
           },
         }),
+        prisma.pendingIntake.count({
+          where: { clinicId, status: "pending" },
+        }),
       ]);
 
       const getWaitingCount = (targetStatus) =>
@@ -127,6 +131,9 @@ router.get(
         },
         billing: {
           monthlyRevenue: revenueAggregate._sum.total || 0,
+        },
+        intakes: {
+          pending: pendingIntakesCount,
         },
       });
     } catch (error) {

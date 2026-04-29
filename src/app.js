@@ -10,6 +10,7 @@ import invoiceRoutes from "./routes/invoice.routes.js";
 import uploadRoutes from "./routes/upload.routes.js";
 import analyticsRoutes from "./routes/analytics.routes.js";
 import intakeRoutes from "./routes/intake.routes.js";
+import pendingIntakesRoutes from "./routes/pendingIntakes.routes.js";
 import billingRoutes from "./routes/billing.routes.js";
 import dashboardRoutes from "./routes/dashboard.routes.js";
 import { apiLimiter } from "./middleware/rateLimit.js";
@@ -131,6 +132,7 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/upload", uploadRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/intake", intakeRoutes);
+app.use("/api/pending-intakes", pendingIntakesRoutes);
 app.use("/api/billing", billingRoutes);
 
 app.use((req, res) => {
