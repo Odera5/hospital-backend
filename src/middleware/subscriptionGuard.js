@@ -1,6 +1,4 @@
-import { PrismaClient } from "@prisma/client";
-
-const prisma = new PrismaClient();
+import { prisma } from "../lib/prisma.js";
 
 /**
  * Middleware to ensure the user's clinic is on a PRO or ENTERPRISE_AI plan.

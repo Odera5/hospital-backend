@@ -806,6 +806,17 @@ export const respondToAppointment = async (req, res) => {
       });
     }
 
+    const appointmentStart = getAppointmentStartDateTime(
+      appointment.appointmentDate,
+      appointment.timeSlot,
+    );
+
+    if (!appointmentStart || appointmentStart <= new Date()) {
+      return res.status(400).json({
+        message: "This appointment is no longer open for patient confirmation.",
+      });
+    }
+
     const updatedAppointment = await prisma.appointment.update({
       where: { id: appointment.id },
       data: {

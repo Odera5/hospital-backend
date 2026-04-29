@@ -103,6 +103,12 @@ const normalizeConsentPayload = (payload = {}) => {
 const buildAttachmentUrl = (patientId, fileName) =>
   `/api/patients/${patientId}/records/attachments/${encodeURIComponent(fileName)}`;
 
+const getStoredAttachmentName = (file) =>
+  path.basename(String(file?.key || file?.filename || file?.originalname || ""));
+
+const getLegacyRecordFilePath = (fileName) =>
+  path.join(process.cwd(), "uploads", "records", path.basename(String(fileName || "")));
+
 const buildExaminationSummary = ({
   examination,
   examinationExtraOral,
@@ -737,8 +743,8 @@ router.post(
       );
       const newFileAttachments = normalizeAttachments(
         req.files?.map((file) => ({
-          name: file.filename,
-          url: buildAttachmentUrl(patient.id, file.filename),
+          name: getStoredAttachmentName(file),
+          url: buildAttachmentUrl(patient.id, getStoredAttachmentName(file)),
           mimetype: file.mimetype,
         })),
       );
@@ -851,11 +857,13 @@ router.put(
       });
 
       const existingAttachments = normalizeAttachments(record.attachments);
-      const removedNames = removedAttachments
+      const removedNames = (removedAttachments
         ? Array.isArray(removedAttachments)
           ? removedAttachments
           : [removedAttachments]
-        : [];
+        : [])
+        .map((name) => path.basename(String(name || "")))
+        .filter(Boolean);
 
       for (const name of removedNames) {
         try {
@@ -864,7 +872,7 @@ router.put(
           console.error("Failed to delete from S3:", err);
         }
         // Fallback for old local files
-        const filePath = path.join("uploads", "records", name);
+        const filePath = getLegacyRecordFilePath(name);
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
       }
 
@@ -877,8 +885,8 @@ router.put(
       );
       const newFileAttachments = normalizeAttachments(
         req.files?.map((file) => ({
-          name: file.filename,
-          url: buildAttachmentUrl(patient.id, file.filename),
+          name: getStoredAttachmentName(file),
+          url: buildAttachmentUrl(patient.id, getStoredAttachmentName(file)),
           mimetype: file.mimetype,
         })),
       );
@@ -973,7 +981,7 @@ router.get(
         return res.redirect(url);
       } catch (err) {
         // Fallback to local files if S3 fails or file is not in S3
-        const filePath = path.join(process.cwd(), "uploads", "records", fileName);
+        const filePath = getLegacyRecordFilePath(fileName);
         if (fs.existsSync(filePath)) {
           return res.sendFile(filePath);
         }
@@ -1099,7 +1107,7 @@ router.delete(
           console.error("Failed to delete from S3:", err);
         }
         // Fallback for old local files
-        const filePath = path.join("uploads", "records", attachment.name);
+        const filePath = getLegacyRecordFilePath(attachment.name);
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
       }
 

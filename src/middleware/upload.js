@@ -3,6 +3,24 @@ import multerS3 from "multer-s3";
 import path from "path";
 import { s3Client, bucketName } from "../lib/s3.js";
 
+const allowedExtensions = new Set([
+  ".jpeg",
+  ".jpg",
+  ".png",
+  ".gif",
+  ".pdf",
+  ".doc",
+  ".docx",
+]);
+const allowedMimeTypes = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+]);
+
 // Set storage engine to Cloudflare R2 via S3 API
 const storage = multerS3({
   s3: s3Client,
@@ -18,10 +36,11 @@ const storage = multerS3({
 
 // File filter (optional)
 const fileFilter = (req, file, cb) => {
-  // Allow only certain file types
-  const allowedTypes = /jpeg|jpg|png|gif|pdf|doc|docx/;
   const ext = path.extname(file.originalname).toLowerCase();
-  if (allowedTypes.test(ext)) {
+  const hasAllowedExtension = allowedExtensions.has(ext);
+  const hasAllowedMimeType = allowedMimeTypes.has(String(file.mimetype || ""));
+
+  if (hasAllowedExtension && hasAllowedMimeType) {
     cb(null, true);
   } else {
     cb(new Error("File type not allowed"));

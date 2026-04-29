@@ -14,6 +14,8 @@ const extMap = {
   "image/webp": ".webp",
   "application/pdf": ".pdf",
 };
+const allowedMimeTypes = new Set(Object.keys(extMap));
+const allowedExtensions = new Set(Object.values(extMap));
 
 const storage = multerS3({
   s3: s3Client,
@@ -31,8 +33,13 @@ const storage = multerS3({
 });
 
 const fileFilter = (req, file, cb) => {
-  const allowedMimeTypes = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
-  if (allowedMimeTypes.includes(file.mimetype)) {
+  const originalExtension = path.extname(String(file.originalname || "")).toLowerCase();
+  const derivedExtension =
+    originalExtension || extMap[String(file.mimetype || "")] || "";
+  const hasAllowedMimeType = allowedMimeTypes.has(String(file.mimetype || ""));
+  const hasAllowedExtension = allowedExtensions.has(derivedExtension);
+
+  if (hasAllowedMimeType && hasAllowedExtension) {
     cb(null, true);
   } else {
     cb(new Error("Invalid file type. Only JPG, PNG, WEBP, and PDF are allowed."), false);

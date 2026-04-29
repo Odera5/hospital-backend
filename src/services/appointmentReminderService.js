@@ -165,6 +165,10 @@ const getAppointmentStartDateTime = (appointmentDate, timeSlot) => {
   return baseDate;
 };
 
+const isWithinReminderWindow = (timeUntilAppointmentMs, leadTimeMs) =>
+  timeUntilAppointmentMs <= leadTimeMs &&
+  timeUntilAppointmentMs > leadTimeMs - REMINDER_POLL_INTERVAL_MS;
+
 const isLikelyE164PhoneNumber = (value) =>
   /^\+[1-9]\d{7,14}$/.test(String(value || "").trim());
 
@@ -564,14 +568,17 @@ export const processAppointmentReminders = async () => {
       }
 
       const timeUntilAppointmentMs = appointmentStart.getTime() - now.getTime();
+      const createdAtMs = new Date(appointment.createdAt).getTime();
+      const hadReal24HourLeadTime =
+        Number.isFinite(createdAtMs) &&
+        createdAtMs <= appointmentStart.getTime() - REMINDER_LEAD_24H_MS;
       const shouldSend24h =
         !appointment.reminder24hSentAt &&
-        timeUntilAppointmentMs <= REMINDER_LEAD_24H_MS &&
-        timeUntilAppointmentMs > REMINDER_LEAD_2H_MS;
+        hadReal24HourLeadTime &&
+        isWithinReminderWindow(timeUntilAppointmentMs, REMINDER_LEAD_24H_MS);
       const shouldSend2h =
         !appointment.reminder2hSentAt &&
-        timeUntilAppointmentMs <= REMINDER_LEAD_2H_MS &&
-        timeUntilAppointmentMs > 0;
+        isWithinReminderWindow(timeUntilAppointmentMs, REMINDER_LEAD_2H_MS);
 
       const reminderType = shouldSend2h ? "2h" : shouldSend24h ? "24h" : null;
       if (!reminderType) {
