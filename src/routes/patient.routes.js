@@ -14,6 +14,10 @@ import {
 } from "../utils/patientCrypto.js";
 import { serializeRecord } from "../utils/serializers.js";
 import { generatePresignedUrl, deleteObjectFromS3 } from "../lib/s3.js";
+import {
+  buildPatientSearchIndexData,
+  clinicHasPendingPatientSearchBackfill,
+} from "../services/patientSearchIndex.js";
 
 const router = express.Router();
 router.use(protect);
@@ -137,8 +141,52 @@ const parsePositiveInteger = (value, fallback) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
+const buildPatientSearchWhere = (search) =>
+  search
+    ? {
+        OR: [
+          {
+            searchName: {
+              contains: search,
+            },
+          },
+          {
+            searchCardNumber: {
+              contains: search,
+            },
+          },
+          {
+            phone: {
+              contains: search,
+              mode: "insensitive",
+            },
+          },
+          {
+            email: {
+              contains: search,
+              mode: "insensitive",
+            },
+          },
+        ],
+      }
+    : {};
+
+const buildPatientSortOrder = (sortBy, sortDirection) => {
+  if (sortBy === "name") return { searchName: sortDirection };
+  if (sortBy === "cardNumber") return { searchCardNumber: sortDirection };
+  if (sortBy === "age") return { ageNumber: sortDirection };
+  return { createdAt: sortDirection };
+};
+
 const normalizeSortDirection = (value, fallback = "desc") =>
   String(value || fallback).toLowerCase() === "asc" ? "asc" : "desc";
+
+const normalizeRecordSortOption = (value) => {
+  const normalized = String(value || "recent").toLowerCase();
+  return ["recent", "oldest", "diagnosis"].includes(normalized)
+    ? normalized
+    : "recent";
+};
 
 const VALID_PATIENT_SORT_FIELDS = new Set([
   "createdAt",
@@ -207,6 +255,10 @@ const createPatientWithGeneratedCardNumber = async ({
         data: {
           clinicId,
           cardNumberSequence: nextSequence,
+          ...buildPatientSearchIndexData({
+            ...patientData,
+            cardNumber: formatCardNumber(nextSequence),
+          }),
           ...toEncryptedPatientData({
             ...patientData,
             cardNumber: formatCardNumber(nextSequence),
@@ -252,11 +304,17 @@ router.get(
       };
 
       const shouldSearch = Boolean(search);
+      const canUseIndexedSearch = !shouldSearch
+        ? true
+        : !(await clinicHasPendingPatientSearchBackfill(clinicId));
       const rawPatients = await prisma.patient.findMany({
-        where: baseWhere,
+        where: {
+          ...baseWhere,
+          ...(canUseIndexedSearch ? buildPatientSearchWhere(search) : {}),
+        },
         select: selectedFields,
         orderBy: { createdAt: "desc" },
-        ...(shouldSearch ? {} : { take: limit }),
+        ...(!shouldSearch || canUseIndexedSearch ? { take: limit } : {}),
       });
 
       const options = rawPatients
@@ -271,7 +329,7 @@ router.get(
           };
         })
         .filter((patient) => {
-          if (!search) return true;
+          if (!search || canUseIndexedSearch) return true;
 
           const searchableValues = [
             patient?.name,
@@ -329,19 +387,30 @@ router.get(
       const page = parsePositiveInteger(pageParam, 1);
       const limit = Math.min(parsePositiveInteger(limitParam, 25), 100);
       const skip = (page - 1) * limit;
-      const usesInMemorySearchOrSort =
+      const requiresIndexedSearchOrSort =
         Boolean(search) ||
         ["name", "age", "cardNumber"].includes(sortBy);
+      const canUseIndexedSearchOrSort =
+        !requiresIndexedSearchOrSort ||
+        !(await clinicHasPendingPatientSearchBackfill(clinicId));
 
-      if (!usesInMemorySearchOrSort) {
+      if (canUseIndexedSearchOrSort) {
         const [patients, total] = await Promise.all([
           prisma.patient.findMany({
-            where: baseWhere,
-            orderBy: { createdAt: sortDirection },
+            where: {
+              ...baseWhere,
+              ...buildPatientSearchWhere(search),
+            },
+            orderBy: buildPatientSortOrder(sortBy, sortDirection),
             skip,
             take: limit,
           }),
-          prisma.patient.count({ where: baseWhere }),
+          prisma.patient.count({
+            where: {
+              ...baseWhere,
+              ...buildPatientSearchWhere(search),
+            },
+          }),
         ]);
 
         return res.json({
@@ -426,19 +495,30 @@ router.get(
       const page = parsePositiveInteger(pageParam, 1);
       const limit = Math.min(parsePositiveInteger(limitParam, 25), 100);
       const skip = (page - 1) * limit;
-      const usesInMemorySearchOrSort =
+      const requiresIndexedSearchOrSort =
         Boolean(search) ||
         ["name", "age", "cardNumber"].includes(sortBy);
+      const canUseIndexedSearchOrSort =
+        !requiresIndexedSearchOrSort ||
+        !(await clinicHasPendingPatientSearchBackfill(clinicId));
 
-      if (!usesInMemorySearchOrSort) {
+      if (canUseIndexedSearchOrSort) {
         const [trash, total] = await Promise.all([
           prisma.patient.findMany({
-            where: baseWhere,
-            orderBy: { [sortBy]: sortDirection },
+            where: {
+              ...baseWhere,
+              ...buildPatientSearchWhere(search),
+            },
+            orderBy: buildPatientSortOrder(sortBy, sortDirection),
             skip,
             take: limit,
           }),
-          prisma.patient.count({ where: baseWhere }),
+          prisma.patient.count({
+            where: {
+              ...baseWhere,
+              ...buildPatientSearchWhere(search),
+            },
+          }),
         ]);
 
         return res.json({
@@ -603,6 +683,11 @@ router.post(
         return {
           clinicId: req.user.clinicId,
           cardNumberSequence: currentSeq,
+          ...buildPatientSearchIndexData({
+            name,
+            age,
+            cardNumber: formatCardNumber(currentSeq),
+          }),
           ...toEncryptedPatientData({
             name,
             age,
@@ -659,6 +744,11 @@ router.put(
         address: updates.address,
         email: updates.email,
       });
+      const patientSearchIndexData = buildPatientSearchIndexData({
+        name: updates.name,
+        age: updates.age,
+        cardNumber: toDecryptedPatient(existingPatient).cardNumber,
+      });
 
       // Patient card numbers remain system-controlled after registration.
       // Retain the already-encrypted cardNumber to prevent double-encryption.
@@ -666,7 +756,10 @@ router.put(
 
       const patient = await prisma.patient.update({
         where: { id: existingPatient.id },
-        data: encryptedData,
+        data: {
+          ...encryptedData,
+          ...patientSearchIndexData,
+        },
       });
 
       res.json(toDecryptedPatient(patient));
@@ -1079,12 +1172,83 @@ router.get(
       if (!patient) return res.status(404).json({ message: "Patient not found" });
 
       const isTrash = req.query.trash === "true";
-      const records = await prisma.record.findMany({
-        where: { patientId: patient.id, isDeleted: isTrash },
-        orderBy: { createdAt: "desc" },
-      });
+      const page = parsePositiveInteger(req.query.page, 1);
+      const limit = Math.min(parsePositiveInteger(req.query.limit, 10), 50);
+      const skip = (page - 1) * limit;
+      const search = normalizeText(req.query.search).toLowerCase();
+      const startDate = normalizeText(req.query.startDate);
+      const endDate = normalizeText(req.query.endDate);
+      const sortOption = normalizeRecordSortOption(req.query.sortOption);
 
-      res.json(records.map(serializeRecord));
+      const where = {
+        patientId: patient.id,
+        isDeleted: isTrash,
+        ...(search
+          ? {
+              OR: [
+                {
+                  presentingComplaint: {
+                    contains: search,
+                    mode: "insensitive",
+                  },
+                },
+                {
+                  diagnosis: {
+                    contains: search,
+                    mode: "insensitive",
+                  },
+                },
+                {
+                  history: {
+                    contains: search,
+                    mode: "insensitive",
+                  },
+                },
+              ],
+            }
+          : {}),
+        ...((startDate || endDate)
+          ? {
+              createdAt: {
+                ...(startDate
+                  ? {
+                      gte: new Date(`${startDate}T00:00:00.000Z`),
+                    }
+                  : {}),
+                ...(endDate
+                  ? {
+                      lte: new Date(`${endDate}T23:59:59.999Z`),
+                    }
+                  : {}),
+              },
+            }
+          : {}),
+      };
+
+      const orderBy =
+        sortOption === "oldest"
+          ? [{ createdAt: "asc" }]
+          : sortOption === "diagnosis"
+            ? [{ diagnosis: "asc" }, { createdAt: "desc" }]
+            : [{ createdAt: "desc" }];
+
+      const [records, total] = await Promise.all([
+        prisma.record.findMany({
+          where,
+          orderBy,
+          skip,
+          take: limit,
+        }),
+        prisma.record.count({ where }),
+      ]);
+
+      res.json({
+        data: records.map(serializeRecord),
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      });
     } catch (error) {
       console.error("Get records error:", error);
       res.status(500).json({ message: "Failed to fetch patient records" });

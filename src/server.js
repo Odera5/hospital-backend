@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 import connectDB from "./db.js";
 import { startAppointmentReminderWorker } from "./services/appointmentReminderService.js";
+import { ensurePatientSearchIndexesBackfilled } from "./services/patientSearchIndex.js";
 import { prisma } from "./lib/prisma.js";
 import app from "./app.js";
 
@@ -48,6 +49,7 @@ const startServer = async () => {
       console.log(`Server running on port ${PORT}`);
     });
     startAppointmentReminderWorker();
+    ensurePatientSearchIndexesBackfilled();
   } catch (err) {
     console.error("Failed to start server:", err);
     process.exit(1);

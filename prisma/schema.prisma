@@ -35,8 +35,11 @@ model Patient {
   clinicId       String
   cardNumberSequence Int?
   name           String
+  searchName     String?
   cardNumber     String        @default("")
+  searchCardNumber String?
   age            String
+  ageNumber      Int?
   email          String        @default("")
   gender         String        @default("other")
   phone          String        @default("")
@@ -53,6 +56,9 @@ model Patient {
 
   @@index([clinicId, createdAt])
   @@index([clinicId, isDeleted])
+  @@index([clinicId, isDeleted, searchName])
+  @@index([clinicId, isDeleted, searchCardNumber])
+  @@index([clinicId, isDeleted, ageNumber])
   @@unique([clinicId, cardNumberSequence])
 }
 

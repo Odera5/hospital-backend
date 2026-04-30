@@ -10,6 +10,7 @@ import {
   issueInvoice,
   recordPayment,
   getInvoiceReport,
+  getInvoicePatients,
 } from "../controllers/invoiceController.js";
 
 const router = express.Router();
@@ -19,6 +20,7 @@ router.use(enforceSubscriptionState({ allowAdminReadOnly: true }));
 
 router.get("/", getAllInvoices);
 router.get("/report", getInvoiceReport);
+router.get("/patients", getInvoicePatients);
 router.get("/:id", getInvoice);
 router.post("/", createInvoice);
 router.put("/:id", updateInvoice);

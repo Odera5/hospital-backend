@@ -31,6 +31,11 @@ const dentistSelect = {
   role: true,
 };
 
+const parsePositiveInteger = (value, fallback) => {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
 const parseReminderEnabled = (value) =>
   value === true || String(value || "").toLowerCase() === "true";
 
@@ -217,6 +222,8 @@ export const getAllAppointments = async (req, res) => {
       startDate,
       endDate,
       excludeStatuses,
+      page: pageParam,
+      limit: limitParam,
     } = req.query;
 
     const parsedExcludedStatuses = excludeStatuses
@@ -244,28 +251,69 @@ export const getAllAppointments = async (req, res) => {
       where.status = { notIn: parsedExcludedStatuses };
     }
 
-    const appointments = await prisma.appointment.findMany({
-      where,
-      include: {
-        patient: {
-          select: appointmentPatientSelect,
-        },
-        dentist: {
-          select: dentistSelect,
-        },
-      },
-      orderBy: { appointmentDate: "asc" },
-    });
+    const shouldPaginate =
+      pageParam !== undefined || limitParam !== undefined;
 
-    res.json(
-      appointments.map((appointment) =>
+    if (!shouldPaginate) {
+      const appointments = await prisma.appointment.findMany({
+        where,
+        include: {
+          patient: {
+            select: appointmentPatientSelect,
+          },
+          dentist: {
+            select: dentistSelect,
+          },
+        },
+        orderBy: [{ appointmentDate: "asc" }, { timeSlot: "asc" }],
+      });
+
+      return res.json(
+        appointments.map((appointment) =>
+          serializeAppointment({
+            ...appointment,
+            patientId: toDecryptedPatient(appointment.patient),
+            dentistId: appointment.dentist,
+          }),
+        ),
+      );
+    }
+
+    const page = parsePositiveInteger(pageParam, 1);
+    const limit = Math.min(parsePositiveInteger(limitParam, 24), 100);
+    const skip = (page - 1) * limit;
+
+    const [appointments, total] = await Promise.all([
+      prisma.appointment.findMany({
+        where,
+        include: {
+          patient: {
+            select: appointmentPatientSelect,
+          },
+          dentist: {
+            select: dentistSelect,
+          },
+        },
+        orderBy: [{ appointmentDate: "asc" }, { timeSlot: "asc" }],
+        skip,
+        take: limit,
+      }),
+      prisma.appointment.count({ where }),
+    ]);
+
+    return res.json({
+      data: appointments.map((appointment) =>
         serializeAppointment({
           ...appointment,
           patientId: toDecryptedPatient(appointment.patient),
           dentistId: appointment.dentist,
         }),
       ),
-    );
+      page,
+      limit,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    });
   } catch (error) {
     console.error("Get appointments error:", error.message);
     res.status(500).json({ message: "Server error" });

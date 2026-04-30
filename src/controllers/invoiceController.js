@@ -96,31 +96,73 @@ const serializeInvoiceResult = (invoice) =>
     patientId: toDecryptedPatient(invoice.patient),
   });
 
+const parsePositiveInteger = (value, fallback) => {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
 export const getAllInvoices = async (req, res) => {
   try {
-    const { patientId, status, startDate, endDate } = req.query;
+    const {
+      patientId,
+      status,
+      startDate,
+      endDate,
+      page: pageParam,
+      limit: limitParam,
+    } = req.query;
 
-    const invoices = await prisma.invoice.findMany({
-      where: {
-        patient: {
-          clinicId: req.user.clinicId,
-        },
-        ...(patientId ? { patientId } : {}),
-        ...(status ? { status } : {}),
-        ...((startDate || endDate)
-          ? {
-              invoiceDate: {
-                ...(startDate ? { gte: new Date(startDate) } : {}),
-                ...(endDate ? { lte: new Date(endDate) } : {}),
-              },
-            }
-          : {}),
+    const where = {
+      patient: {
+        clinicId: req.user.clinicId,
       },
-      include: invoiceInclude,
-      orderBy: { invoiceDate: "desc" },
-    });
+      ...(patientId ? { patientId } : {}),
+      ...(status ? { status } : {}),
+      ...((startDate || endDate)
+        ? {
+            invoiceDate: {
+              ...(startDate ? { gte: new Date(startDate) } : {}),
+              ...(endDate ? { lte: new Date(endDate) } : {}),
+            },
+          }
+        : {}),
+    };
 
-    res.json(invoices.map(serializeInvoiceResult));
+    const shouldPaginate =
+      pageParam !== undefined || limitParam !== undefined;
+
+    if (!shouldPaginate) {
+      const invoices = await prisma.invoice.findMany({
+        where,
+        include: invoiceInclude,
+        orderBy: [{ invoiceDate: "desc" }, { createdAt: "desc" }],
+      });
+
+      return res.json(invoices.map(serializeInvoiceResult));
+    }
+
+    const page = parsePositiveInteger(pageParam, 1);
+    const limit = Math.min(parsePositiveInteger(limitParam, 20), 100);
+    const skip = (page - 1) * limit;
+
+    const [invoices, total] = await Promise.all([
+      prisma.invoice.findMany({
+        where,
+        include: invoiceInclude,
+        orderBy: [{ invoiceDate: "desc" }, { createdAt: "desc" }],
+        skip,
+        take: limit,
+      }),
+      prisma.invoice.count({ where }),
+    ]);
+
+    return res.json({
+      data: invoices.map(serializeInvoiceResult),
+      page,
+      limit,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    });
   } catch (error) {
     console.error("Get invoices error:", error.message);
     res.status(500).json({ message: "Server error" });
@@ -433,11 +475,12 @@ export const recordPayment = async (req, res) => {
 
 export const getInvoiceReport = async (req, res) => {
   try {
-    const { startDate, endDate } = req.query;
+    const { startDate, endDate, patientId } = req.query;
     const invoiceWhere = {
       patient: {
         clinicId: req.user.clinicId,
       },
+      ...(patientId ? { patientId } : {}),
       status: { not: "draft" },
       ...((startDate || endDate)
         ? {
@@ -449,7 +492,12 @@ export const getInvoiceReport = async (req, res) => {
         : {}),
     };
 
-    const [invoiceAggregate, statusGroups] = await Promise.all([
+    const dueTodayStart = new Date();
+    dueTodayStart.setHours(0, 0, 0, 0);
+    const dueTodayEnd = new Date();
+    dueTodayEnd.setHours(23, 59, 59, 999);
+
+    const [invoiceAggregate, statusGroups, draftCount, dueTodayCount, outstandingPatients] = await Promise.all([
       prisma.invoice.aggregate({
         where: invoiceWhere,
         _count: { _all: true },
@@ -464,6 +512,34 @@ export const getInvoiceReport = async (req, res) => {
         where: invoiceWhere,
         _count: { _all: true },
       }),
+      prisma.invoice.count({
+        where: {
+          patient: { clinicId: req.user.clinicId },
+          ...(patientId ? { patientId } : {}),
+          status: "draft",
+        },
+      }),
+      prisma.invoice.count({
+        where: {
+          patient: { clinicId: req.user.clinicId },
+          ...(patientId ? { patientId } : {}),
+          status: { in: ["issued", "overdue"] },
+          balance: { gt: 0 },
+          dueDate: {
+            gte: dueTodayStart,
+            lte: dueTodayEnd,
+          },
+        },
+      }),
+      prisma.invoice.groupBy({
+        by: ["patientId"],
+        where: {
+          patient: { clinicId: req.user.clinicId },
+          ...(patientId ? { patientId } : {}),
+          status: { not: "cancelled" },
+          balance: { gt: 0 },
+        },
+      }),
     ]);
 
     const getStatusCount = (targetStatus) =>
@@ -476,11 +552,45 @@ export const getInvoiceReport = async (req, res) => {
       totalOutstanding: invoiceAggregate._sum.balance || 0,
       paidInvoices: getStatusCount("paid"),
       overdueInvoices: getStatusCount("overdue"),
+      outstandingPatients: outstandingPatients.length,
+      dueToday: dueTodayCount,
+      drafts: draftCount,
     };
 
     res.json(report);
   } catch (error) {
     console.error("Get invoice report error:", error.message);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+export const getInvoicePatients = async (req, res) => {
+  try {
+    const patients = await prisma.patient.findMany({
+      where: {
+        clinicId: req.user.clinicId,
+        isDeleted: false,
+        invoices: {
+          some: {},
+        },
+      },
+      select: invoicePatientSelect,
+      orderBy: { createdAt: "desc" },
+    });
+
+    res.json(
+      patients.map((patient) => {
+        const decrypted = toDecryptedPatient(patient);
+        return {
+          id: decrypted.id,
+          name: decrypted.name,
+          phone: decrypted.phone,
+          email: decrypted.email,
+        };
+      }),
+    );
+  } catch (error) {
+    console.error("Get invoice patients error:", error.message);
     res.status(500).json({ message: "Server error" });
   }
 };
