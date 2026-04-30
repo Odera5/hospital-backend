@@ -1,5 +1,10 @@
 import crypto from "crypto";
 import { prisma } from "../lib/prisma.js";
+import {
+  hasActivePaidSubscription,
+  hasActiveProAccess,
+  isTrialingClinic,
+} from "../utils/subscriptionAccess.js";
 
 const PAYSTACK_API_BASE_URL = "https://api.paystack.co";
 const PRO_PLAN_NAME = "PrimuxCare Pro Monthly";
@@ -171,7 +176,7 @@ const buildCustomFields = (clinic) => [
 
 export const serializeBillingClinic = (clinic) => ({
   id: clinic.id,
-  plan: clinic.plan || "FREE",
+  plan: clinic.plan || "PRO",
   subscriptionEnds: clinic.subscriptionEnds || null,
   paystackCustomerCode: clinic.paystackCustomerCode || null,
   paystackPlanCode: clinic.paystackPlanCode || null,
@@ -179,6 +184,9 @@ export const serializeBillingClinic = (clinic) => ({
   paystackSubscriptionStatus: clinic.paystackSubscriptionStatus || null,
   paystackNextPaymentDate: clinic.paystackNextPaymentDate || null,
   paystackLastReference: clinic.paystackLastReference || null,
+  hasActivePaidSubscription: hasActivePaidSubscription(clinic),
+  hasActiveProAccess: hasActiveProAccess(clinic),
+  isTrialing: isTrialingClinic(clinic),
 });
 
 export const ensurePaystackPlan = async (clinic, interval = MONTHLY_INTERVAL) => {
@@ -330,7 +338,7 @@ export const disableClinicSubscription = async (clinicId, status = "disabled") =
   prisma.clinic.update({
     where: { id: clinicId },
     data: {
-      plan: "FREE",
+      plan: "PRO",
       paystackSubscriptionStatus: status,
       subscriptionEnds: null,
     },

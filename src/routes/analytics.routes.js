@@ -2,8 +2,11 @@ import express from "express";
 import { prisma } from "../lib/prisma.js";
 import { protect, authorizeRoles } from "../middleware/authorize.js";
 import { requireProOrEnterprise } from "../middleware/subscriptionGuard.js";
+import { enforceSubscriptionState } from "../middleware/subscriptionStateGuard.js";
 
 const router = express.Router();
+router.use(protect);
+router.use(enforceSubscriptionState({ allowAdminReadOnly: true }));
 
 router.get("/dashboard", protect, authorizeRoles("admin", "doctor"), requireProOrEnterprise, async (req, res) => {
   try {

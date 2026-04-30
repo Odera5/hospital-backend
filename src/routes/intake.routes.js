@@ -4,6 +4,10 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { toEncryptedPatientData } from "../utils/patientCrypto.js";
 import { SLOT_MINUTES, listAvailableSlots } from "../utils/appointmentScheduling.js";
+import {
+  hasActiveProAccess,
+  getUpgradeRequiredMessage,
+} from "../utils/subscriptionAccess.js";
 
 const router = express.Router();
 
@@ -28,8 +32,8 @@ const validateIntakeAccess = (clinic, accessToken) => {
     return "Clinic not found";
   }
 
-  if (clinic.plan === "FREE") {
-    return "This clinic's plan does not support online patient intake forms.";
+  if (!hasActiveProAccess(clinic)) {
+    return getUpgradeRequiredMessage();
   }
 
   if (!clinic.intakeEnabled) {

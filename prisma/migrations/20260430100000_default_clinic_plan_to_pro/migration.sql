@@ -1,0 +1,2 @@
+ALTER TABLE "Clinic"
+ALTER COLUMN "plan" SET DEFAULT 'PRO';

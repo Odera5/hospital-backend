@@ -1,7 +1,11 @@
 import { prisma } from "../lib/prisma.js";
+import {
+  hasActiveProAccess,
+  getUpgradeRequiredMessage,
+} from "../utils/subscriptionAccess.js";
 
 /**
- * Middleware to ensure the user's clinic is on a PRO or ENTERPRISE_AI plan.
+ * Middleware to ensure the user's clinic still has active Pro access.
  * Must be used AFTER verifyToken.
  */
 export const requireProOrEnterprise = async (req, res, next) => {
@@ -24,29 +28,9 @@ export const requireProOrEnterprise = async (req, res, next) => {
       return res.status(404).json({ message: "Clinic not found." });
     }
 
-    const paystackSubscriptionStatus = String(
-      clinic.paystackSubscriptionStatus || "",
-    ).toLowerCase();
-    const hasActivePaystackSubscription = ["active", "attention"].includes(
-      paystackSubscriptionStatus,
-    );
-
-    if (
-      clinic.plan === "PRO" &&
-      clinic.subscriptionEnds &&
-      new Date(clinic.subscriptionEnds) < new Date() &&
-      !hasActivePaystackSubscription
-    ) {
-      await prisma.clinic.update({
-        where: { id: clinic.id },
-        data: { plan: "FREE" }
-      });
-      clinic.plan = "FREE";
-    }
-
-    if (clinic.plan === "FREE") {
-      return res.status(403).json({ 
-        message: "This feature requires a Pro or Enterprise subscription.",
+    if (!hasActiveProAccess(clinic)) {
+      return res.status(403).json({
+        message: getUpgradeRequiredMessage(),
         errorCode: "UPGRADE_REQUIRED"
       });
     }

@@ -5,6 +5,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { protect, authorizeRoles } from "../middleware/authorize.js";
 import { requireProOrEnterprise } from "../middleware/subscriptionGuard.js";
+import { enforceSubscriptionState } from "../middleware/subscriptionStateGuard.js";
 import upload from "../middleware/upload.js";
 import { logAuditEvent } from "../services/auditLog.js";
 import {
@@ -15,6 +16,8 @@ import { serializeRecord } from "../utils/serializers.js";
 import { generatePresignedUrl, deleteObjectFromS3 } from "../lib/s3.js";
 
 const router = express.Router();
+router.use(protect);
+router.use(enforceSubscriptionState({ allowAdminReadOnly: true }));
 
 const normalizeText = (value) => (typeof value === "string" ? value.trim() : "");
 
@@ -138,6 +141,14 @@ const normalizeSortDirection = (value, fallback = "desc") =>
   String(value || fallback).toLowerCase() === "asc" ? "asc" : "desc";
 
 const VALID_PATIENT_SORT_FIELDS = new Set([
+  "createdAt",
+  "name",
+  "age",
+  "cardNumber",
+]);
+
+const VALID_TRASH_SORT_FIELDS = new Set([
+  "deletedAt",
   "createdAt",
   "name",
   "age",
@@ -387,12 +398,90 @@ router.get(
   authorizeRoles("admin"),
   async (req, res) => {
     try {
+      const clinicId = req.user.clinicId;
+      const pageParam = req.query.page;
+      const limitParam = req.query.limit;
+      const search = normalizeText(req.query.search).toLowerCase();
+      const requestedSortBy = normalizeText(req.query.sortBy);
+      const sortBy = VALID_TRASH_SORT_FIELDS.has(requestedSortBy)
+        ? requestedSortBy
+        : "deletedAt";
+      const sortDirection = normalizeSortDirection(
+        req.query.sortDirection,
+        "desc",
+      );
+      const shouldPaginate =
+        pageParam !== undefined || limitParam !== undefined;
+      const baseWhere = { clinicId, isDeleted: true };
+
+      if (!shouldPaginate) {
+        const trash = await prisma.patient.findMany({
+          where: baseWhere,
+          orderBy: { deletedAt: "desc" },
+        });
+
+        return res.json(trash.map(toDecryptedPatient));
+      }
+
+      const page = parsePositiveInteger(pageParam, 1);
+      const limit = Math.min(parsePositiveInteger(limitParam, 25), 100);
+      const skip = (page - 1) * limit;
+      const usesInMemorySearchOrSort =
+        Boolean(search) ||
+        ["name", "age", "cardNumber"].includes(sortBy);
+
+      if (!usesInMemorySearchOrSort) {
+        const [trash, total] = await Promise.all([
+          prisma.patient.findMany({
+            where: baseWhere,
+            orderBy: { [sortBy]: sortDirection },
+            skip,
+            take: limit,
+          }),
+          prisma.patient.count({ where: baseWhere }),
+        ]);
+
+        return res.json({
+          data: trash.map(toDecryptedPatient),
+          page,
+          limit,
+          total,
+          totalPages: Math.max(1, Math.ceil(total / limit)),
+        });
+      }
+
       const trash = await prisma.patient.findMany({
-        where: { clinicId: req.user.clinicId, isDeleted: true },
-        orderBy: { createdAt: "desc" },
+        where: baseWhere,
+        orderBy: { deletedAt: "desc" },
       });
 
-      res.json(trash.map(toDecryptedPatient));
+      const filteredPatients = trash
+        .map(toDecryptedPatient)
+        .filter((patient) => {
+          if (!search) return true;
+
+          const searchableValues = [patient?.name, patient?.cardNumber]
+            .filter(Boolean)
+            .map((value) => String(value).toLowerCase());
+
+          return searchableValues.some((value) => value.includes(search));
+        });
+
+      const sortedPatients = sortPatientsCollection(
+        filteredPatients,
+        sortBy,
+        sortDirection,
+      );
+      const total = sortedPatients.length;
+      const paginatedPatients = sortedPatients.slice(skip, skip + limit);
+
+      return res.json({
+        data: paginatedPatients,
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      });
     } catch (error) {
       console.error("Get trash error:", error);
       res.status(500).json({ message: "Failed to fetch trash" });
@@ -423,20 +512,6 @@ router.post(
   authorizeRoles("admin", "doctor", "nurse"),
   async (req, res) => {
     try {
-      const clinic = await prisma.clinic.findUnique({
-        where: { id: req.user.clinicId }
-      });
-      
-      if (clinic?.plan === "FREE") {
-        const patientCount = await prisma.patient.count({
-          where: { clinicId: req.user.clinicId, isDeleted: false }
-        });
-        
-        if (patientCount >= 100) {
-          return res.status(403).json({ message: "You have reached the Free Plan limit of 100 patients. Please upgrade to Pro to add more." });
-        }
-      }
-
       const name = normalizeText(req.body?.name);
       const age = normalizeText(req.body?.age);
       const gender = normalizeText(req.body?.gender) || "other";
@@ -613,7 +688,7 @@ router.delete(
 
       const updatedPatient = await prisma.patient.update({
         where: { id: patient.id },
-        data: { isDeleted: true },
+        data: { isDeleted: true, deletedAt: new Date() },
       });
 
       res.json({
@@ -647,7 +722,7 @@ router.put(
 
       const restoredPatient = await prisma.patient.update({
         where: { id: req.params.id },
-        data: { isDeleted: false },
+        data: { isDeleted: false, deletedAt: null },
       });
 
       res.json({

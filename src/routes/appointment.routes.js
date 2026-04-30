@@ -1,5 +1,6 @@
 import express from "express";
 import { verifyToken } from "../middleware/verifyToken.js";
+import { enforceSubscriptionState } from "../middleware/subscriptionStateGuard.js";
 import {
   getAllAppointments,
   getAppointment,
@@ -16,6 +17,7 @@ router.post("/respond", respondToAppointment);
 
 // All routes require authentication
 router.use(verifyToken);
+router.use(enforceSubscriptionState({ allowAdminReadOnly: true }));
 
 // GET routes
 router.get("/", getAllAppointments);

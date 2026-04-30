@@ -1,5 +1,6 @@
 import express from "express";
 import { verifyToken } from "../middleware/verifyToken.js";
+import { enforceSubscriptionState } from "../middleware/subscriptionStateGuard.js";
 import { prisma } from "../lib/prisma.js";
 import {
   getAllInvoices,
@@ -14,6 +15,7 @@ import {
 const router = express.Router();
 
 router.use(verifyToken);
+router.use(enforceSubscriptionState({ allowAdminReadOnly: true }));
 
 router.get("/", getAllInvoices);
 router.get("/report", getInvoiceReport);

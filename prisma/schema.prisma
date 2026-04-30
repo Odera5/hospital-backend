@@ -91,7 +91,7 @@ model Clinic {
   users          User[]
   patients       Patient[]
   pendingIntakes PendingIntake[]
-  plan           PlanType  @default(FREE)
+  plan           PlanType  @default(PRO)
   logoUrl        String?
   brandColor     String?
   intakeEnabled  Boolean   @default(false)

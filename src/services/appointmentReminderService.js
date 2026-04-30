@@ -1,13 +1,15 @@
 import { prisma } from "../lib/prisma.js";
 import { toDecryptedPatient } from "../utils/patientCrypto.js";
+import {
+  hasReminderAccess,
+  getReminderAccessRequiredMessage,
+} from "../utils/subscriptionAccess.js";
 
 const RESEND_API_URL = "https://api.resend.com/emails";
 const TWILIO_API_BASE_URL = "https://api.twilio.com/2010-04-01";
 const REMINDER_POLL_INTERVAL_MS = 5 * 60 * 1000;
 const REMINDER_LEAD_24H_MS = 24 * 60 * 60 * 1000;
 const REMINDER_LEAD_2H_MS = 2 * 60 * 60 * 1000;
-const ACTIVE_PAYSTACK_STATUSES = ["active", "attention", "success"];
-
 let transporterPromise = null;
 let reminderIntervalId = null;
 let reminderJobRunning = false;
@@ -126,27 +128,6 @@ const getTransporter = async () => {
   }
 
   return transporterPromise;
-};
-
-const clinicHasReminderAccess = (clinic) => {
-  if (!clinic || clinic.plan !== "PRO") return false;
-
-  const paystackStatus = String(
-    clinic.paystackSubscriptionStatus || "",
-  ).toLowerCase();
-  const hasActivePaidSubscription = ACTIVE_PAYSTACK_STATUSES.includes(
-    paystackStatus,
-  );
-
-  if (
-    clinic.subscriptionEnds &&
-    new Date(clinic.subscriptionEnds) < new Date() &&
-    !hasActivePaidSubscription
-  ) {
-    return false;
-  }
-
-  return true;
 };
 
 const getAppointmentStartDateTime = (appointmentDate, timeSlot) => {
@@ -531,11 +512,11 @@ export const processAppointmentReminders = async () => {
         continue;
       }
 
-      if (!clinicHasReminderAccess(clinic)) {
+      if (!hasReminderAccess(clinic)) {
         await markReminderDisabled(
           appointment.id,
           "plan_locked",
-          "Automated reminders require an active Pro plan or trial.",
+          getReminderAccessRequiredMessage(),
         );
         continue;
       }

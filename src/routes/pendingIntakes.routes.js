@@ -3,14 +3,21 @@ import { Prisma } from "@prisma/client";
 import crypto from "crypto";
 import { prisma } from "../lib/prisma.js";
 import { protect, authorizeRoles } from "../middleware/authorize.js";
+import { enforceSubscriptionState } from "../middleware/subscriptionStateGuard.js";
 import { toEncryptedPatientData } from "../utils/patientCrypto.js";
 import {
   SLOT_MINUTES,
   getAppointmentStartDateTime,
   isSlotAvailableForDuration,
 } from "../utils/appointmentScheduling.js";
+import {
+  hasReminderAccess,
+  getReminderAccessRequiredMessage,
+} from "../utils/subscriptionAccess.js";
 
 const router = express.Router();
+router.use(protect);
+router.use(enforceSubscriptionState({ allowAdminReadOnly: true }));
 
 const formatCardNumber = (sequence) => `P-${String(sequence).padStart(6, "0")}`;
 
@@ -23,26 +30,6 @@ const isPatientCardSequenceConflict = (error) =>
 
 const createAppointmentResponseToken = () =>
   crypto.randomBytes(24).toString("hex");
-
-const ACTIVE_PAYSTACK_STATUSES = ["active", "attention", "success"];
-
-const clinicHasReminderAccess = (clinic) => {
-  if (!clinic || clinic.plan !== "PRO") return false;
-
-  const hasActivePaidSubscription = ACTIVE_PAYSTACK_STATUSES.includes(
-    String(clinic.paystackSubscriptionStatus || "").toLowerCase(),
-  );
-
-  if (
-    clinic.subscriptionEnds &&
-    new Date(clinic.subscriptionEnds) < new Date() &&
-    !hasActivePaidSubscription
-  ) {
-    return false;
-  }
-
-  return true;
-};
 
 const isResendConfigured = () =>
   Boolean(process.env.RESEND_API_KEY?.trim() && process.env.EMAIL_FROM?.trim());
@@ -76,7 +63,7 @@ const buildReminderUpdate = ({
   appointmentDate,
   timeSlot,
 }) => {
-  const hasReminderAccess = clinicHasReminderAccess(clinic);
+  const hasClinicReminderAccess = hasReminderAccess(clinic);
   const appointmentStart = getAppointmentStartDateTime(appointmentDate, timeSlot);
   const normalizedPatientEmail = String(patientEmail || "").trim();
   const normalizedPatientPhone = String(patientPhone || "").trim();
@@ -86,7 +73,7 @@ const buildReminderUpdate = ({
     (isEmailConfigured() && hasPatientEmail) ||
     (isSmsConfigured() && hasValidPatientPhone);
   const canScheduleReminder =
-    hasReminderAccess &&
+    hasClinicReminderAccess &&
     hasReachableContact &&
     appointmentStart &&
     appointmentStart > new Date();
@@ -95,7 +82,7 @@ const buildReminderUpdate = ({
     reminderEnabled: canScheduleReminder,
     reminderStatus: canScheduleReminder
       ? "scheduled"
-      : !hasReminderAccess
+      : !hasClinicReminderAccess
         ? "plan_locked"
         : !hasReachableContact && hasPatientEmail
           ? "no_phone"
@@ -104,8 +91,8 @@ const buildReminderUpdate = ({
             : "disabled",
     reminderLastError: canScheduleReminder
       ? ""
-      : !hasReminderAccess
-        ? "Automated reminders require an active Pro plan or trial."
+      : !hasClinicReminderAccess
+        ? getReminderAccessRequiredMessage()
         : !hasReachableContact
           ? "Patient phone number or email is required for automated reminders."
           : "",

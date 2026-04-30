@@ -3,6 +3,10 @@ import { prisma } from "../lib/prisma.js";
 
 export const protect = async (req, res, next) => {
   try {
+    if (req.user) {
+      return next();
+    }
+
     const authHeader = req.headers.authorization;
 
     if (
@@ -18,7 +22,18 @@ export const protect = async (req, res, next) => {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const users = await prisma.$queryRaw`
-      SELECT u.id, u.name, u.email, u.role, u."isActive", u."clinicId", u."refreshToken", c."isActive" AS "clinicIsActive"
+      SELECT
+        u.id,
+        u.name,
+        u.email,
+        u.role,
+        u."isActive",
+        u."clinicId",
+        u."refreshToken",
+        c."isActive" AS "clinicIsActive",
+        c."plan" AS "clinicPlan",
+        c."subscriptionEnds" AS "clinicSubscriptionEnds",
+        c."paystackSubscriptionStatus" AS "clinicPaystackSubscriptionStatus"
       FROM "User" u
       INNER JOIN "Clinic" c ON c.id = u."clinicId"
       WHERE u.id = ${decoded.id}
@@ -35,6 +50,14 @@ export const protect = async (req, res, next) => {
         message: "Your clinic account has been deactivated. Contact support for reactivation.",
       });
     }
+
+    user.clinic = {
+      id: user.clinicId,
+      isActive: Boolean(user.clinicIsActive),
+      plan: user.clinicPlan || "PRO",
+      subscriptionEnds: user.clinicSubscriptionEnds || null,
+      paystackSubscriptionStatus: user.clinicPaystackSubscriptionStatus || null,
+    };
 
     if (decoded.sessionId) {
       if (!user.refreshToken) {

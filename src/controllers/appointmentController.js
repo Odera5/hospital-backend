@@ -3,12 +3,15 @@ import { prisma } from "../lib/prisma.js";
 import { serializeAppointment } from "../utils/serializers.js";
 import { toDecryptedPatient } from "../utils/patientCrypto.js";
 import {
+  hasReminderAccess,
+  getReminderAccessRequiredMessage,
+} from "../utils/subscriptionAccess.js";
+import {
   SLOT_MINUTES,
   getAppointmentStartDateTime,
   isSlotAvailableForDuration,
   listAvailableSlots,
 } from "../utils/appointmentScheduling.js";
-const ACTIVE_PAYSTACK_STATUSES = ["active", "attention", "success"];
 const appointmentPatientSelect = {
   id: true,
   clinicId: true,
@@ -31,24 +34,6 @@ const dentistSelect = {
 const parseReminderEnabled = (value) =>
   value === true || String(value || "").toLowerCase() === "true";
 
-const clinicHasReminderAccess = (clinic) => {
-  if (!clinic || clinic.plan !== "PRO") return false;
-
-  const hasActivePaidSubscription = ACTIVE_PAYSTACK_STATUSES.includes(
-    String(clinic.paystackSubscriptionStatus || "").toLowerCase(),
-  );
-
-  if (
-    clinic.subscriptionEnds &&
-    new Date(clinic.subscriptionEnds) < new Date() &&
-    !hasActivePaidSubscription
-  ) {
-    return false;
-  }
-
-  return true;
-};
-
 const buildDateFilter = (startDate, endDate) => {
   if (!startDate && !endDate) return undefined;
 
@@ -67,7 +52,7 @@ const buildDateFilter = (startDate, endDate) => {
 };
 
 const getReminderPlanError = () =>
-  "Automated reminders require an active Pro plan or trial.";
+  getReminderAccessRequiredMessage();
 
 const isResendConfigured = () =>
   Boolean(process.env.RESEND_API_KEY?.trim() && process.env.EMAIL_FROM?.trim());
@@ -126,7 +111,7 @@ const buildReminderUpdate = ({
   nextStatus = "scheduled",
   resetSchedule = false,
 }) => {
-  const hasReminderAccess = clinicHasReminderAccess(clinic);
+  const hasClinicReminderAccess = hasReminderAccess(clinic);
   const appointmentStart = getAppointmentStartDateTime(appointmentDate, timeSlot);
   const normalizedPatientEmail = String(patientEmail || "").trim();
   const normalizedPatientPhone = String(patientPhone || "").trim();
@@ -141,7 +126,7 @@ const buildReminderUpdate = ({
   const canScheduleReminder =
     Boolean(requestedReminderEnabled) &&
     nextStatus === "scheduled" &&
-    hasReminderAccess &&
+    hasClinicReminderAccess &&
     hasReachableContact &&
     appointmentStart &&
     appointmentStart > new Date();
@@ -152,7 +137,7 @@ const buildReminderUpdate = ({
       ? "scheduled"
       : nextStatus !== "scheduled"
         ? "disabled"
-        : requestedReminderEnabled && !hasReminderAccess
+        : requestedReminderEnabled && !hasClinicReminderAccess
           ? "plan_locked"
           : requestedReminderEnabled && !hasReachableContact && needsOnlyEmail
             ? "no_email"
@@ -171,7 +156,7 @@ const buildReminderUpdate = ({
             : "disabled",
     reminderLastError: canScheduleReminder
       ? ""
-      : requestedReminderEnabled && !hasReminderAccess
+      : requestedReminderEnabled && !hasClinicReminderAccess
         ? getReminderPlanError()
         : requestedReminderEnabled && !hasReachableContact && needsOnlyEmail
           ? getReminderContactError()

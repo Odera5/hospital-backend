@@ -12,11 +12,19 @@ import {
   sendDeactivationOtpEmail,
   sendPasswordResetEmail,
 } from "../services/emailVerification.js";
+import {
+  hasActivePaidSubscription,
+  hasActiveProAccess,
+  isSubscriptionExpired,
+  isTrialingClinic,
+  getUpgradeRequiredMessage,
+  getAdminSubscriptionExpiredMessage,
+  getStaffSubscriptionExpiredMessage,
+} from "../utils/subscriptionAccess.js";
 import crypto from "crypto";
 
 const router = express.Router();
 const STAFF_ROLES = ["admin", "doctor", "nurse"];
-const ACTIVE_PAYSTACK_SUBSCRIPTION_STATUSES = ["active", "attention"];
 const DEFAULT_PROCEDURE_PRESETS = [
   { description: "Consultation", category: "service", unitPrice: 5000 },
   { description: "Scaling and Polishing", category: "procedure", unitPrice: 15000 },
@@ -71,7 +79,7 @@ const serializeClinic = (clinic) =>
         contactPerson: clinic.contactPerson,
         procedurePresetPrices: normalizeProcedurePresetPrices(clinic.procedurePresetPrices),
         isActive: Boolean(clinic.isActive),
-        plan: clinic.plan || "FREE",
+        plan: clinic.plan || "PRO",
         logoUrl: clinic.logoUrl || null,
         brandColor: clinic.brandColor || null,
         intakeEnabled: Boolean(clinic.intakeEnabled),
@@ -82,6 +90,9 @@ const serializeClinic = (clinic) =>
         paystackSubscriptionCode: clinic.paystackSubscriptionCode || null,
         paystackSubscriptionStatus: clinic.paystackSubscriptionStatus || null,
         paystackLastReference: clinic.paystackLastReference || null,
+        hasActivePaidSubscription: hasActivePaidSubscription(clinic),
+        hasActiveProAccess: hasActiveProAccess(clinic),
+        isTrialing: isTrialingClinic(clinic),
         createdAt: clinic.createdAt,
       }
     : null;
@@ -133,25 +144,6 @@ const refreshVerificationForUser = async (user) => {
 
 const createIntakePublicToken = () =>
   crypto.randomBytes(24).toString("hex");
-
-const hasActivePaidSubscription = (clinic) => {
-  return ACTIVE_PAYSTACK_SUBSCRIPTION_STATUSES.includes(
-    String(clinic?.paystackSubscriptionStatus || "").toLowerCase(),
-  );
-};
-
-const shouldAutoDowngradeClinic = (clinic) => {
-  const hasActivePaystackSubscription = ACTIVE_PAYSTACK_SUBSCRIPTION_STATUSES.includes(
-    String(clinic?.paystackSubscriptionStatus || "").toLowerCase(),
-  );
-
-  return Boolean(
-    clinic?.plan === "PRO" &&
-      clinic?.subscriptionEnds &&
-      new Date(clinic.subscriptionEnds) < new Date() &&
-      !hasActivePaystackSubscription,
-  );
-};
 
 const ensureAnotherActiveAdminExists = async (userId, clinicId) => {
   const targetUser = await getUserById(userId);
@@ -566,7 +558,6 @@ router.post("/signup", protect, authorizeRoles("admin"), async (req, res) => {
       return res.status(400).json({ message: "User already exists" });
     }
 
-    // Enforce Staff Limits for Free/Trial Accounts
     const clinic = await prisma.clinic.findUnique({
       where: { id: req.user.clinicId }
     });
@@ -575,17 +566,11 @@ router.post("/signup", protect, authorizeRoles("admin"), async (req, res) => {
       return res.status(404).json({ message: "Clinic not found" });
     }
 
-    const hasPaid = hasActivePaidSubscription(clinic);
-    if (!hasPaid) {
-      const currentStaffCount = await prisma.user.count({
-        where: { clinicId: req.user.clinicId }
+    if (!hasActiveProAccess(clinic)) {
+      return res.status(403).json({
+        message: getUpgradeRequiredMessage(),
+        errorCode: "UPGRADE_REQUIRED",
       });
-      
-      if (currentStaffCount >= 2) {
-        return res.status(403).json({ 
-          message: "You have reached the staff limit for trial/free accounts. Please upgrade your plan to add unlimited staff members." 
-        });
-      }
     }
 
     const hashedPassword = await bcrypt.hash(password.trim(), 10);
@@ -633,6 +618,13 @@ router.post("/signup", protect, authorizeRoles("admin"), async (req, res) => {
 
 router.get("/staff", protect, authorizeRoles("admin"), async (req, res) => {
   try {
+    if (isSubscriptionExpired(req.user.clinic)) {
+      return res.status(403).json({
+        message: getAdminSubscriptionExpiredMessage(),
+        errorCode: "SUBSCRIPTION_EXPIRED",
+      });
+    }
+
     const staff = await prisma.user.findMany({
       where: { clinicId: req.user.clinicId },
       include: { clinic: true },
@@ -648,6 +640,13 @@ router.get("/staff", protect, authorizeRoles("admin"), async (req, res) => {
 
 router.patch("/staff/:id/status", protect, authorizeRoles("admin"), async (req, res) => {
   try {
+    if (isSubscriptionExpired(req.user.clinic)) {
+      return res.status(403).json({
+        message: getAdminSubscriptionExpiredMessage(),
+        errorCode: "SUBSCRIPTION_EXPIRED",
+      });
+    }
+
     const isActive = Boolean(req.body?.isActive);
     const existingUser = await getUserById(req.params.id);
 
@@ -692,6 +691,13 @@ router.patch("/staff/:id/status", protect, authorizeRoles("admin"), async (req, 
 
 router.delete("/staff/:id", protect, authorizeRoles("admin"), async (req, res) => {
   try {
+    if (isSubscriptionExpired(req.user.clinic)) {
+      return res.status(403).json({
+        message: getAdminSubscriptionExpiredMessage(),
+        errorCode: "SUBSCRIPTION_EXPIRED",
+      });
+    }
+
     const existingUser = await getUserById(req.params.id);
 
     if (!existingUser || existingUser.clinicId !== req.user.clinicId) {
@@ -748,13 +754,20 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    // Auto-Downgrade Check: If trial expired, drop to FREE
-    if (shouldAutoDowngradeClinic(user.clinic)) {
-      await prisma.clinic.update({
-        where: { id: user.clinic.id },
-        data: { plan: "FREE" }
+    if (isSubscriptionExpired(user.clinic) && user.role !== "admin") {
+      return res.status(403).json({
+        message: getStaffSubscriptionExpiredMessage(),
+        errorCode: "SUBSCRIPTION_EXPIRED",
       });
-      user.clinic.plan = "FREE";
+    }
+
+    if (!hasActiveProAccess(user.clinic) && user.role === "admin") {
+      // Allow admins to sign in so they can renew from the billing flow.
+    } else if (!hasActiveProAccess(user.clinic)) {
+      return res.status(403).json({
+        message: getUpgradeRequiredMessage(),
+        errorCode: "UPGRADE_REQUIRED",
+      });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
@@ -902,6 +915,25 @@ router.post("/refresh-token", async (req, res) => {
     if (!user.clinic?.isActive) {
       return res.status(403).json({
         message: "Your clinic account has been deactivated. Contact support for reactivation.",
+      });
+    }
+    if (isSubscriptionExpired(user.clinic) && user.role !== "admin") {
+      return res.status(403).json({
+        message: getStaffSubscriptionExpiredMessage(),
+        errorCode: "SUBSCRIPTION_EXPIRED",
+      });
+    }
+
+    if (!hasActiveProAccess(user.clinic) && user.role === "admin") {
+      const sessionId = user.refreshToken.substring(user.refreshToken.length - 15);
+      const newAccessToken = generateAccessToken(user, sessionId);
+      return res.json({ accessToken: newAccessToken });
+    }
+
+    if (!hasActiveProAccess(user.clinic)) {
+      return res.status(403).json({
+        message: getUpgradeRequiredMessage(),
+        errorCode: "UPGRADE_REQUIRED",
       });
     }
 
