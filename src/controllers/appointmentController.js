@@ -205,7 +205,23 @@ const buildConfirmationUpdate = ({
 }) => ({
   patientConfirmationStatus: reset ? "pending" : currentStatus || "pending",
   patientConfirmationRespondedAt: reset ? null : undefined,
+  patientRequestedRescheduleDate: reset ? null : undefined,
+  patientRequestedRescheduleTime: reset ? null : undefined,
+  patientRequestedRescheduleNote: reset ? "" : undefined,
+  patientRequestedRescheduleAt: reset ? null : undefined,
 });
+
+const getPatientResponseLockedMessage = (confirmationStatus) => {
+  if (confirmationStatus === "confirmed") {
+    return "This appointment has already been confirmed.";
+  }
+
+  if (confirmationStatus === "reschedule_requested") {
+    return "A reschedule request has already been sent for this appointment.";
+  }
+
+  return "This appointment response link has already been used.";
+};
 
 export const getAllAppointments = async (req, res) => {
   try {
@@ -667,6 +683,15 @@ export const respondToAppointment = async (req, res) => {
   try {
     const token = String(req.body?.token || req.query?.token || "").trim();
     const action = String(req.body?.action || req.query?.action || "").trim().toLowerCase();
+    const preferredDate = String(
+      req.body?.preferredDate || req.query?.preferredDate || "",
+    ).trim();
+    const preferredTime = String(
+      req.body?.preferredTime || req.query?.preferredTime || "",
+    ).trim();
+    const preferredNote = String(
+      req.body?.preferredNote || req.query?.preferredNote || "",
+    ).trim();
 
     if (!token) {
       return res.status(400).json({ message: "Response token is required" });
@@ -674,6 +699,26 @@ export const respondToAppointment = async (req, res) => {
 
     if (!["confirm", "reschedule"].includes(action)) {
       return res.status(400).json({ message: "Invalid response action" });
+    }
+
+    let normalizedPreferredDate = null;
+
+    if (action === "reschedule") {
+      if (!preferredDate || !preferredTime) {
+        return res.status(400).json({
+          message:
+            "Please select your preferred new date and time before submitting this reschedule request.",
+        });
+      }
+
+      normalizedPreferredDate = new Date(preferredDate);
+      if (Number.isNaN(normalizedPreferredDate.getTime())) {
+        return res.status(400).json({
+          message: "Preferred reschedule date is invalid.",
+        });
+      }
+
+      normalizedPreferredDate.setHours(0, 0, 0, 0);
     }
 
     const appointment = await prisma.appointment.findUnique({
@@ -709,6 +754,14 @@ export const respondToAppointment = async (req, res) => {
       return res.status(404).json({ message: "Appointment not found" });
     }
 
+    if (appointment.patientConfirmationStatus !== "pending") {
+      return res.status(400).json({
+        message: getPatientResponseLockedMessage(
+          appointment.patientConfirmationStatus,
+        ),
+      });
+    }
+
     if (appointment.status !== "scheduled") {
       return res.status(400).json({
         message: "This appointment is no longer open for patient confirmation.",
@@ -726,13 +779,61 @@ export const respondToAppointment = async (req, res) => {
       });
     }
 
-    const updatedAppointment = await prisma.appointment.update({
-      where: { id: appointment.id },
-      data: {
-        patientConfirmationStatus:
-          action === "confirm" ? "confirmed" : "reschedule_requested",
-        patientConfirmationRespondedAt: new Date(),
+    const nextConfirmationStatus =
+      action === "confirm" ? "confirmed" : "reschedule_requested";
+    const respondedAt = new Date();
+
+    const updateResult = await prisma.appointment.updateMany({
+      where: {
+        id: appointment.id,
+        status: "scheduled",
+        patientConfirmationStatus: "pending",
       },
+      data: {
+        patientConfirmationStatus: nextConfirmationStatus,
+        patientConfirmationRespondedAt: respondedAt,
+        patientRequestedRescheduleDate:
+          action === "reschedule" ? normalizedPreferredDate : null,
+        patientRequestedRescheduleTime:
+          action === "reschedule" ? preferredTime : null,
+        patientRequestedRescheduleNote:
+          action === "reschedule" ? preferredNote.slice(0, 500) : "",
+        patientRequestedRescheduleAt:
+          action === "reschedule" ? respondedAt : null,
+        ...(action === "reschedule"
+          ? {
+              reminderEnabled: false,
+              reminderStatus: "disabled",
+              reminderLastError: "",
+            }
+          : {}),
+      },
+    });
+
+    if (updateResult.count === 0) {
+      const latestAppointment = await prisma.appointment.findUnique({
+        where: { id: appointment.id },
+        select: {
+          status: true,
+          patientConfirmationStatus: true,
+        },
+      });
+
+      if (latestAppointment?.patientConfirmationStatus !== "pending") {
+        return res.status(400).json({
+          message: getPatientResponseLockedMessage(
+            latestAppointment?.patientConfirmationStatus,
+          ),
+        });
+      }
+
+      return res.status(400).json({
+        message: "This appointment is no longer open for patient confirmation.",
+      });
+    }
+
+    const updatedAppointment = await prisma.appointment.findUnique({
+      where: { id: appointment.id },
       include: {
         patient: {
           select: appointmentPatientSelect,

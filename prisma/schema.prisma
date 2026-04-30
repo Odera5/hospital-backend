@@ -159,6 +159,10 @@ model Appointment {
   reminderLastError String  @default("")
   patientConfirmationStatus String @default("pending")
   patientConfirmationRespondedAt DateTime?
+  patientRequestedRescheduleDate DateTime?
+  patientRequestedRescheduleTime String?
+  patientRequestedRescheduleNote String @default("")
+  patientRequestedRescheduleAt DateTime?
   patientResponseToken String @unique
 
   createdAt       DateTime @default(now())

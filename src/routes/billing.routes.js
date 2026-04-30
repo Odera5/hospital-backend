@@ -6,9 +6,12 @@ import {
   getPaystackManageLink,
   initializePaystackCheckout,
   verifyPaystackCheckout,
+  verifyPaystackCheckoutPublic,
 } from "../controllers/billingController.js";
 
 const router = express.Router();
+
+router.get("/paystack/verify-public", verifyPaystackCheckoutPublic);
 
 router.get("/", protect, authorizeRoles("admin"), getBillingOverview);
 router.post(

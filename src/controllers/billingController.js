@@ -9,6 +9,16 @@ import {
   verifyPaystackTransaction,
 } from "../services/paystack.js";
 
+const buildPaystackVerificationResponse = ({ clinic, transaction, message }) => ({
+  message: message || "Paystack subscription activated successfully",
+  clinic: clinic ? serializeBillingClinic(clinic) : null,
+  transaction: {
+    reference: transaction.reference,
+    status: transaction.status,
+    paidAt: transaction.paid_at || transaction.paidAt || null,
+  },
+});
+
 export const getBillingOverview = async (req, res) => {
   try {
     const clinic = await prisma.clinic.findUnique({
@@ -94,17 +104,43 @@ export const verifyPaystackCheckout = async (req, res) => {
       return res.status(404).json({ message: "Clinic billing record not found" });
     }
 
-    return res.json({
-      message: "Paystack subscription activated successfully",
-      clinic: serializeBillingClinic(clinic),
-      transaction: {
-        reference: transaction.reference,
-        status: transaction.status,
-        paidAt: transaction.paid_at || transaction.paidAt || null,
-      },
-    });
+    return res.json(
+      buildPaystackVerificationResponse({
+        clinic,
+        transaction,
+      }),
+    );
   } catch (error) {
     console.error("Verify Paystack checkout error:", error);
+    return res.status(error.statusCode || 500).json({
+      message: error.message || "Failed to verify Paystack payment",
+    });
+  }
+};
+
+export const verifyPaystackCheckoutPublic = async (req, res) => {
+  try {
+    const reference = String(req.query?.reference || req.body?.reference || "").trim();
+
+    if (!reference) {
+      return res.status(400).json({ message: "Payment reference is required" });
+    }
+
+    const { clinic, transaction } = await verifyPaystackTransaction(reference);
+
+    if (!clinic) {
+      return res.status(404).json({ message: "Clinic billing record not found" });
+    }
+
+    return res.json(
+      buildPaystackVerificationResponse({
+        clinic,
+        transaction,
+        message: "Paystack payment confirmed successfully",
+      }),
+    );
+  } catch (error) {
+    console.error("Public verify Paystack checkout error:", error);
     return res.status(error.statusCode || 500).json({
       message: error.message || "Failed to verify Paystack payment",
     });

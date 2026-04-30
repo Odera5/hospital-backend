@@ -78,6 +78,9 @@ router.get(
               gte: startOfDay,
               lte: endOfDay,
             },
+            status: {
+              notIn: ["cancelled", "completed"],
+            },
           },
         }),
         prisma.appointment.count({

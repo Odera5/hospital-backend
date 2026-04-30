@@ -4,7 +4,11 @@ import crypto from "crypto";
 import { prisma } from "../lib/prisma.js";
 import { protect, authorizeRoles } from "../middleware/authorize.js";
 import { toEncryptedPatientData } from "../utils/patientCrypto.js";
-import { getAppointmentStartDateTime } from "../utils/appointmentScheduling.js";
+import {
+  SLOT_MINUTES,
+  getAppointmentStartDateTime,
+  isSlotAvailableForDuration,
+} from "../utils/appointmentScheduling.js";
 
 const router = express.Router();
 
@@ -133,53 +137,146 @@ router.post("/:id/approve", protect, authorizeRoles("admin", "doctor", "nurse"),
   try {
     const { id } = req.params;
     const clinicId = req.user.clinicId;
-    const { assignedTime, assignedDate } = req.body;
+    const assignedDate = String(req.body?.assignedDate || "").trim();
+    const assignedTime = String(req.body?.assignedTime || "").trim();
 
-    const pendingIntake = await prisma.pendingIntake.findUnique({
-      where: { id },
-      include: {
-        clinic: {
-          select: {
-            plan: true,
-            subscriptionEnds: true,
-            paystackSubscriptionStatus: true,
-          },
-        },
-      },
-    });
-
-    if (!pendingIntake || pendingIntake.clinicId !== clinicId || pendingIntake.status !== "pending") {
-      return res.status(404).json({ message: "Pending intake not found or already processed." });
+    if ((assignedDate && !assignedTime) || (!assignedDate && assignedTime)) {
+      return res.status(400).json({
+        message: "Assigned appointment date and time must be provided together.",
+      });
     }
 
-    let createdPatient = null;
+    let result = null;
 
-    // Retry logic for sequence generation
     for (let attempt = 0; attempt < 5; attempt += 1) {
       try {
-        const aggregate = await prisma.patient.aggregate({
-          where: { clinicId },
-          _max: { cardNumberSequence: true },
-        });
+        result = await prisma.$transaction(async (tx) => {
+          const pendingIntake = await tx.pendingIntake.findUnique({
+            where: { id },
+            include: {
+              clinic: {
+                select: {
+                  id: true,
+                  plan: true,
+                  subscriptionEnds: true,
+                  paystackSubscriptionStatus: true,
+                },
+              },
+            },
+          });
 
-        const nextSequence = (aggregate._max.cardNumberSequence || 0) + 1;
+          if (
+            !pendingIntake ||
+            pendingIntake.clinicId !== clinicId ||
+            pendingIntake.status !== "pending"
+          ) {
+            const error = new Error("Pending intake not found or already processed.");
+            error.statusCode = 404;
+            throw error;
+          }
 
-        createdPatient = await prisma.patient.create({
-          data: {
-            clinicId,
-            cardNumberSequence: nextSequence,
-            ...toEncryptedPatientData({
-              name: pendingIntake.name,
-              age: pendingIntake.age,
-              gender: pendingIntake.gender,
-              phone: pendingIntake.phone,
-              address: pendingIntake.address,
-              email: pendingIntake.email,
-              cardNumber: formatCardNumber(nextSequence),
-            }),
-          },
+          const aggregate = await tx.patient.aggregate({
+            where: { clinicId },
+            _max: { cardNumberSequence: true },
+          });
+
+          const nextSequence = (aggregate._max.cardNumberSequence || 0) + 1;
+
+          const createdPatient = await tx.patient.create({
+            data: {
+              clinicId,
+              cardNumberSequence: nextSequence,
+              ...toEncryptedPatientData({
+                name: pendingIntake.name,
+                age: pendingIntake.age,
+                gender: pendingIntake.gender,
+                phone: pendingIntake.phone,
+                address: pendingIntake.address,
+                email: pendingIntake.email,
+                cardNumber: formatCardNumber(nextSequence),
+              }),
+            },
+          });
+
+          let createdAppointment = null;
+
+          if (assignedDate && assignedTime) {
+            const appointmentDay = new Date(assignedDate);
+            if (Number.isNaN(appointmentDay.getTime())) {
+              const error = new Error("Assigned appointment date is invalid.");
+              error.statusCode = 400;
+              throw error;
+            }
+
+            const startOfDay = new Date(appointmentDay);
+            startOfDay.setHours(0, 0, 0, 0);
+            const endOfDay = new Date(appointmentDay);
+            endOfDay.setHours(23, 59, 59, 999);
+
+            const dayAppointments = await tx.appointment.findMany({
+              where: {
+                patient: { clinicId, isDeleted: false },
+                appointmentDate: {
+                  gte: startOfDay,
+                  lte: endOfDay,
+                },
+                status: { not: "cancelled" },
+              },
+              select: {
+                id: true,
+                timeSlot: true,
+                duration: true,
+                status: true,
+              },
+            });
+
+            if (
+              !isSlotAvailableForDuration(
+                assignedTime,
+                SLOT_MINUTES,
+                dayAppointments,
+              )
+            ) {
+              const error = new Error(
+                "That appointment time is no longer available. Please choose another slot.",
+              );
+              error.statusCode = 400;
+              throw error;
+            }
+
+            const reminderUpdate = buildReminderUpdate({
+              clinic: pendingIntake.clinic,
+              patientEmail: pendingIntake.email,
+              patientPhone: pendingIntake.phone,
+              appointmentDate: assignedDate,
+              timeSlot: assignedTime,
+            });
+
+            createdAppointment = await tx.appointment.create({
+              data: {
+                patientId: createdPatient.id,
+                appointmentDate: new Date(assignedDate),
+                timeSlot: assignedTime,
+                appointmentType: "checkup",
+                status: "scheduled",
+                notes: "Booked via online intake form.",
+                patientResponseToken: createAppointmentResponseToken(),
+                ...reminderUpdate,
+              },
+            });
+          }
+
+          await tx.pendingIntake.update({
+            where: { id },
+            data: { status: "approved" },
+          });
+
+          return {
+            patient: createdPatient,
+            appointment: createdAppointment,
+          };
         });
-        break; // Success
+        break;
       } catch (error) {
         if (isPatientCardSequenceConflict(error) && attempt < 4) {
           continue;
@@ -188,47 +285,20 @@ router.post("/:id/approve", protect, authorizeRoles("admin", "doctor", "nurse"),
       }
     }
 
-    if (!createdPatient) {
-       throw new Error("Failed to generate a unique patient card number");
+    if (!result?.patient) {
+      throw new Error("Failed to approve intake request.");
     }
 
-    // Create an Appointment if date/time was provided
-    const apptDate = assignedDate || pendingIntake.preferredDate;
-    const apptTime = assignedTime || pendingIntake.preferredTime;
-    
-    if (apptDate && apptTime) {
-       const reminderUpdate = buildReminderUpdate({
-          clinic: pendingIntake.clinic,
-          patientEmail: pendingIntake.email,
-          patientPhone: pendingIntake.phone,
-          appointmentDate: apptDate,
-          timeSlot: apptTime,
-       });
-
-       await prisma.appointment.create({
-          data: {
-             patientId: createdPatient.id,
-             appointmentDate: new Date(apptDate),
-             timeSlot: apptTime,
-             appointmentType: "checkup",
-             status: "scheduled",
-             notes: "Booked via online intake form.",
-             patientResponseToken: createAppointmentResponseToken(),
-             ...reminderUpdate,
-          }
-       });
-    }
-
-    // Update the pending intake status to approved
-    await prisma.pendingIntake.update({
-      where: { id },
-      data: { status: "approved" }
+    res.status(200).json({
+      message: "Patient registered successfully",
+      patient: result.patient,
+      appointment: result.appointment,
     });
-
-    res.status(200).json({ message: "Patient registered successfully", patient: createdPatient });
   } catch (error) {
     console.error("Approve pending intake error:", error);
-    res.status(500).json({ message: "Failed to approve intake request. Please try again." });
+    res.status(error.statusCode || 500).json({
+      message: error.message || "Failed to approve intake request. Please try again.",
+    });
   }
 });
 
