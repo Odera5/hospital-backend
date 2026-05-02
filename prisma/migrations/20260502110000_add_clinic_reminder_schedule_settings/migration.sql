@@ -1,0 +1,4 @@
+ALTER TABLE "Clinic"
+ADD COLUMN "reminderTimezone" TEXT NOT NULL DEFAULT 'Africa/Lagos',
+ADD COLUMN "reminderWindowStartHour" INTEGER NOT NULL DEFAULT 8,
+ADD COLUMN "reminderWindowEndHour" INTEGER NOT NULL DEFAULT 18;

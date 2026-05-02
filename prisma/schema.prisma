@@ -102,6 +102,9 @@ model Clinic {
   brandColor     String?
   intakeEnabled  Boolean   @default(false)
   intakePublicToken String? @unique
+  reminderTimezone String   @default("Africa/Lagos")
+  reminderWindowStartHour Int @default(8)
+  reminderWindowEndHour Int   @default(18)
   stripeCustomerId String?
   paystackCustomerCode String?
   paystackPlanCode String?

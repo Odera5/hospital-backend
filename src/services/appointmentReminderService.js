@@ -10,6 +10,8 @@ const TWILIO_API_BASE_URL = "https://api.twilio.com/2010-04-01";
 const REMINDER_POLL_INTERVAL_MS = 5 * 60 * 1000;
 const REMINDER_LEAD_24H_MS = 24 * 60 * 60 * 1000;
 const REMINDER_LEAD_2H_MS = 2 * 60 * 60 * 1000;
+const DEFAULT_REMINDER_TIMEZONE =
+  process.env.DEFAULT_CLINIC_TIMEZONE?.trim() || "Africa/Lagos";
 let transporterPromise = null;
 let reminderIntervalId = null;
 let reminderJobRunning = false;
@@ -146,12 +148,210 @@ const getAppointmentStartDateTime = (appointmentDate, timeSlot) => {
   return baseDate;
 };
 
-const isWithinReminderWindow = (timeUntilAppointmentMs, leadTimeMs) =>
-  timeUntilAppointmentMs <= leadTimeMs &&
-  timeUntilAppointmentMs > leadTimeMs - REMINDER_POLL_INTERVAL_MS;
-
 const isLikelyE164PhoneNumber = (value) =>
   /^\+[1-9]\d{7,14}$/.test(String(value || "").trim());
+
+const isValidTimeZone = (value) => {
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: value }).format(new Date());
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const normalizeHour = (value, fallback) => {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.max(0, Math.min(23, parsed));
+};
+
+const getClinicReminderPolicy = (clinic) => {
+  const reminderTimezone = isValidTimeZone(clinic?.reminderTimezone)
+    ? clinic.reminderTimezone
+    : DEFAULT_REMINDER_TIMEZONE;
+  const reminderWindowStartHour = normalizeHour(
+    clinic?.reminderWindowStartHour,
+    8,
+  );
+  const reminderWindowEndHour = normalizeHour(
+    clinic?.reminderWindowEndHour,
+    18,
+  );
+
+  return {
+    reminderTimezone,
+    reminderWindowStartHour:
+      reminderWindowStartHour < reminderWindowEndHour
+        ? reminderWindowStartHour
+        : 8,
+    reminderWindowEndHour:
+      reminderWindowStartHour < reminderWindowEndHour
+        ? reminderWindowEndHour
+        : 18,
+  };
+};
+
+const zonedDateTimeFormatterCache = new Map();
+
+const getZonedDateTimeFormatter = (timeZone) => {
+  const cacheKey = String(timeZone || DEFAULT_REMINDER_TIMEZONE);
+
+  if (!zonedDateTimeFormatterCache.has(cacheKey)) {
+    zonedDateTimeFormatterCache.set(
+      cacheKey,
+      new Intl.DateTimeFormat("en-CA", {
+        timeZone: cacheKey,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      }),
+    );
+  }
+
+  return zonedDateTimeFormatterCache.get(cacheKey);
+};
+
+const getZonedParts = (date, timeZone) => {
+  const formatter = getZonedDateTimeFormatter(timeZone);
+  const parts = formatter.formatToParts(date);
+  const values = {};
+
+  parts.forEach((part) => {
+    if (part.type !== "literal") {
+      values[part.type] = part.value;
+    }
+  });
+
+  return {
+    year: Number(values.year),
+    month: Number(values.month),
+    day: Number(values.day),
+    hour: Number(values.hour),
+    minute: Number(values.minute),
+    second: Number(values.second),
+  };
+};
+
+const getTimeZoneOffsetMs = (date, timeZone) => {
+  const parts = getZonedParts(date, timeZone);
+  const asUtc = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+  );
+
+  return asUtc - date.getTime();
+};
+
+const getUtcDateForZonedDateTime = (
+  { year, month, day, hour = 0, minute = 0, second = 0 },
+  timeZone,
+) => {
+  let candidate = new Date(
+    Date.UTC(year, month - 1, day, hour, minute, second, 0),
+  );
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const offset = getTimeZoneOffsetMs(candidate, timeZone);
+    const nextCandidate = new Date(
+      Date.UTC(year, month - 1, day, hour, minute, second, 0) - offset,
+    );
+
+    if (Math.abs(nextCandidate.getTime() - candidate.getTime()) < 1000) {
+      return nextCandidate;
+    }
+
+    candidate = nextCandidate;
+  }
+
+  return candidate;
+};
+
+const addDaysToZonedDate = ({ year, month, day }, days) => {
+  const next = new Date(Date.UTC(year, month - 1, day + days, 0, 0, 0, 0));
+
+  return {
+    year: next.getUTCFullYear(),
+    month: next.getUTCMonth() + 1,
+    day: next.getUTCDate(),
+  };
+};
+
+const getWindowBoundsForZonedDate = (dateParts, policy) => ({
+  windowStart: getUtcDateForZonedDateTime(
+    {
+      year: dateParts.year,
+      month: dateParts.month,
+      day: dateParts.day,
+      hour: policy.reminderWindowStartHour,
+      minute: 0,
+      second: 0,
+    },
+    policy.reminderTimezone,
+  ),
+  windowEnd: getUtcDateForZonedDateTime(
+    {
+      year: dateParts.year,
+      month: dateParts.month,
+      day: dateParts.day,
+      hour: policy.reminderWindowEndHour,
+      minute: 0,
+      second: 0,
+    },
+    policy.reminderTimezone,
+  ),
+});
+
+const getScheduledReminderTime = (
+  nominalTriggerAt,
+  appointmentStart,
+  policy,
+) => {
+  let probe = new Date(nominalTriggerAt);
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const probeParts = getZonedParts(probe, policy.reminderTimezone);
+    const { windowStart, windowEnd } = getWindowBoundsForZonedDate(
+      probeParts,
+      policy,
+    );
+
+    let scheduledAt = nominalTriggerAt;
+
+    if (scheduledAt < windowStart) {
+      scheduledAt = windowStart;
+    } else if (scheduledAt >= windowEnd) {
+      const nextDay = addDaysToZonedDate(probeParts, 1);
+      probe = getUtcDateForZonedDateTime(
+        {
+          year: nextDay.year,
+          month: nextDay.month,
+          day: nextDay.day,
+          hour: policy.reminderWindowStartHour,
+          minute: 0,
+          second: 0,
+        },
+        policy.reminderTimezone,
+      );
+      continue;
+    }
+
+    return scheduledAt < appointmentStart ? scheduledAt : null;
+  }
+
+  return null;
+};
 
 const buildReminderLinks = (responseToken) => {
   const baseUrl = getBaseUrl().replace(/\/$/, "");
@@ -473,6 +673,9 @@ export const processAppointmentReminders = async () => {
                 plan: true,
                 subscriptionEnds: true,
                 paystackSubscriptionStatus: true,
+                reminderTimezone: true,
+                reminderWindowStartHour: true,
+                reminderWindowEndHour: true,
               },
             },
           },
@@ -553,13 +756,29 @@ export const processAppointmentReminders = async () => {
       const hadReal24HourLeadTime =
         Number.isFinite(createdAtMs) &&
         createdAtMs <= appointmentStart.getTime() - REMINDER_LEAD_24H_MS;
+      const policy = getClinicReminderPolicy(clinic);
+      const scheduled24hAt = hadReal24HourLeadTime
+        ? getScheduledReminderTime(
+            new Date(appointmentStart.getTime() - REMINDER_LEAD_24H_MS),
+            appointmentStart,
+            policy,
+          )
+        : null;
+      const scheduled2hAt = getScheduledReminderTime(
+        new Date(appointmentStart.getTime() - REMINDER_LEAD_2H_MS),
+        appointmentStart,
+        policy,
+      );
       const shouldSend24h =
         !appointment.reminder24hSentAt &&
-        hadReal24HourLeadTime &&
-        isWithinReminderWindow(timeUntilAppointmentMs, REMINDER_LEAD_24H_MS);
+        scheduled24hAt &&
+        now >= scheduled24hAt &&
+        timeUntilAppointmentMs > 0;
       const shouldSend2h =
         !appointment.reminder2hSentAt &&
-        isWithinReminderWindow(timeUntilAppointmentMs, REMINDER_LEAD_2H_MS);
+        scheduled2hAt &&
+        now >= scheduled2hAt &&
+        timeUntilAppointmentMs > 0;
 
       const reminderType = shouldSend2h ? "2h" : shouldSend24h ? "24h" : null;
       if (!reminderType) {

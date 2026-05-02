@@ -66,6 +66,27 @@ const normalizeProcedurePresetPrices = (value) => {
   });
 };
 
+const DEFAULT_REMINDER_TIMEZONE =
+  process.env.DEFAULT_CLINIC_TIMEZONE?.trim() || "Africa/Lagos";
+
+const isValidTimeZone = (value) => {
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: value }).format(new Date());
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const normalizeReminderHour = (value, fallback) => {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.min(23, Math.max(0, parsed));
+};
+
 const serializeClinic = (clinic) =>
   clinic
     ? {
@@ -84,6 +105,16 @@ const serializeClinic = (clinic) =>
         brandColor: clinic.brandColor || null,
         intakeEnabled: Boolean(clinic.intakeEnabled),
         intakePublicToken: clinic.intakePublicToken || null,
+        reminderTimezone:
+          clinic.reminderTimezone || DEFAULT_REMINDER_TIMEZONE,
+        reminderWindowStartHour: normalizeReminderHour(
+          clinic.reminderWindowStartHour,
+          8,
+        ),
+        reminderWindowEndHour: normalizeReminderHour(
+          clinic.reminderWindowEndHour,
+          18,
+        ),
         subscriptionEnds: clinic.subscriptionEnds || null,
         paystackCustomerCode: clinic.paystackCustomerCode || null,
         paystackPlanCode: clinic.paystackPlanCode || null,
@@ -195,6 +226,16 @@ router.put("/clinic-profile", protect, authorizeRoles("admin"), async (req, res)
     const contactPerson = req.body?.contactPerson?.trim() || "";
     const logoUrl = req.body?.logoUrl?.trim() || null;
     const brandColor = req.body?.brandColor?.trim() || null;
+    const reminderTimezone =
+      req.body?.reminderTimezone?.trim() || DEFAULT_REMINDER_TIMEZONE;
+    const reminderWindowStartHour = normalizeReminderHour(
+      req.body?.reminderWindowStartHour,
+      8,
+    );
+    const reminderWindowEndHour = normalizeReminderHour(
+      req.body?.reminderWindowEndHour,
+      18,
+    );
     const procedurePresetPrices = normalizeProcedurePresetPrices(
       req.body?.procedurePresetPrices,
     );
@@ -202,6 +243,18 @@ router.put("/clinic-profile", protect, authorizeRoles("admin"), async (req, res)
     if (!clinicName || !clinicEmail) {
       return res.status(400).json({
         message: "Clinic name and clinic email are required",
+      });
+    }
+
+    if (!isValidTimeZone(reminderTimezone)) {
+      return res.status(400).json({
+        message: "Reminder timezone is invalid. Use a valid IANA timezone like Africa/Lagos.",
+      });
+    }
+
+    if (reminderWindowStartHour >= reminderWindowEndHour) {
+      return res.status(400).json({
+        message: "Reminder sending start hour must be earlier than the end hour.",
       });
     }
 
@@ -231,6 +284,9 @@ router.put("/clinic-profile", protect, authorizeRoles("admin"), async (req, res)
         contactPerson,
         logoUrl,
         brandColor,
+        reminderTimezone,
+        reminderWindowStartHour,
+        reminderWindowEndHour,
         procedurePresetPrices,
       },
     });
