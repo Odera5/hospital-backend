@@ -27,6 +27,20 @@ const intakeLimiter = rateLimit({
   message: { message: "Too many intake submissions from this IP. Please try again later." }
 });
 
+const intakeAccessClinicSelect = {
+  id: true,
+  name: true,
+  logoUrl: true,
+  brandColor: true,
+  plan: true,
+  address: true,
+  phone: true,
+  intakeEnabled: true,
+  intakePublicToken: true,
+  subscriptionEnds: true,
+  paystackSubscriptionStatus: true,
+};
+
 const validateIntakeAccess = (clinic, accessToken) => {
   if (!clinic) {
     return "Clinic not found";
@@ -54,16 +68,7 @@ router.get("/:clinicId", async (req, res) => {
     
     const clinic = await prisma.clinic.findUnique({
       where: { id: clinicId },
-      select: {
-         name: true,
-         logoUrl: true,
-         brandColor: true,
-         plan: true,
-         address: true,
-         phone: true,
-         intakeEnabled: true,
-         intakePublicToken: true,
-      }
+      select: intakeAccessClinicSelect,
     });
 
     const accessError = validateIntakeAccess(
@@ -94,12 +99,7 @@ router.get("/:clinicId/available-slots", async (req, res) => {
 
     const clinic = await prisma.clinic.findUnique({
       where: { id: clinicId },
-      select: {
-        id: true,
-        plan: true,
-        intakeEnabled: true,
-        intakePublicToken: true,
-      },
+      select: intakeAccessClinicSelect,
     });
 
     const accessError = validateIntakeAccess(
@@ -152,12 +152,7 @@ router.post("/:clinicId", intakeLimiter, async (req, res) => {
 
     const clinic = await prisma.clinic.findUnique({
       where: { id: clinicId },
-      select: {
-        id: true,
-        plan: true,
-        intakeEnabled: true,
-        intakePublicToken: true,
-      },
+      select: intakeAccessClinicSelect,
     });
 
     const accessError = validateIntakeAccess(
