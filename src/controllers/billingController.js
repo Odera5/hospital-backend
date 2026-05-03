@@ -3,6 +3,7 @@ import {
   disablePaystackSubscription,
   generatePaystackManageLink,
   initializePaystackSubscription,
+  parseRequestedBillingInterval,
   processPaystackWebhookEvent,
   serializeBillingClinic,
   verifyPaystackSignature,
@@ -38,7 +39,7 @@ export const getBillingOverview = async (req, res) => {
 
 export const initializePaystackCheckout = async (req, res) => {
   try {
-    const interval = req.body.interval === "annually" ? "annually" : "monthly";
+    const interval = parseRequestedBillingInterval(req.body?.interval);
 
     const clinic = await prisma.clinic.findUnique({
       where: { id: req.user.clinicId },

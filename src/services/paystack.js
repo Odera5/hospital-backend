@@ -18,6 +18,26 @@ const PRO_PLAN_DESCRIPTION_ANNUAL =
   "PrimuxCare Pro annual subscription for clinics in Nigeria";
 const ANNUAL_INTERVAL = "annually";
 const DEFAULT_PRO_AMOUNT_KOBO_ANNUAL = 100000000;
+export const SUPPORTED_BILLING_INTERVALS = [
+  MONTHLY_INTERVAL,
+  ANNUAL_INTERVAL,
+];
+
+export const parseRequestedBillingInterval = (interval) => {
+  const normalizedInterval = String(interval || "")
+    .trim()
+    .toLowerCase();
+
+  if (SUPPORTED_BILLING_INTERVALS.includes(normalizedInterval)) {
+    return normalizedInterval;
+  }
+
+  const error = new Error(
+    `Unsupported billing interval. Supported intervals: ${SUPPORTED_BILLING_INTERVALS.join(", ")}.`,
+  );
+  error.statusCode = 400;
+  throw error;
+};
 
 const resolveBaseUrl = () =>
   process.env.APP_BASE_URL?.trim() ||
@@ -40,7 +60,9 @@ const requirePaystackSecretKey = () => {
 };
 
 const getPlanConfig = (interval = MONTHLY_INTERVAL) => {
-  if (interval === ANNUAL_INTERVAL) {
+  const normalizedInterval = parseRequestedBillingInterval(interval);
+
+  if (normalizedInterval === ANNUAL_INTERVAL) {
     const configuredAmount = Number(process.env.PAYSTACK_PRO_PLAN_AMOUNT_KOBO_ANNUAL);
     return {
       name: PRO_PLAN_NAME_ANNUAL,

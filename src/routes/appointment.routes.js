@@ -10,6 +10,7 @@ import {
   getAvailableSlots,
   respondToAppointment,
 } from "../controllers/appointmentController.js";
+import { validateAppointment } from "../middleware/validators.js";
 
 const router = express.Router();
 
@@ -25,10 +26,10 @@ router.get("/available-slots", getAvailableSlots);
 router.get("/:id", getAppointment);
 
 // POST route
-router.post("/", createAppointment);
+router.post("/", validateAppointment, createAppointment);
 
 // PUT route
-router.put("/:id", updateAppointment);
+router.put("/:id", validateAppointment, updateAppointment);
 
 // DELETE route
 router.delete("/:id", deleteAppointment);

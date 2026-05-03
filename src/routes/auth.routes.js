@@ -5,6 +5,12 @@ import { prisma } from "../lib/prisma.js";
 import { protect, authorizeRoles } from "../middleware/authorize.js";
 import { generateAccessToken, generateRefreshToken } from "../utils/jwt.js";
 import {
+  validateClinicRegistration,
+  validateSignup,
+  validateLogin,
+  validateClinicProfileUpdate
+} from "../middleware/validators.js";
+import {
   createEmailVerification,
   getVerificationErrorMessage,
   sendVerificationEmail,
@@ -215,7 +221,7 @@ router.get("/clinic-profile", protect, async (req, res) => {
   }
 });
 
-router.put("/clinic-profile", protect, authorizeRoles("admin"), async (req, res) => {
+router.put("/clinic-profile", protect, authorizeRoles("admin"), validateClinicProfileUpdate, async (req, res) => {
   try {
     const clinicName = req.body?.clinicName?.trim();
     const clinicEmail = req.body?.clinicEmail?.trim().toLowerCase();
@@ -482,7 +488,7 @@ router.post("/clinic-profile/deactivate/verify", protect, authorizeRoles("admin"
   }
 });
 
-router.post("/register-clinic", async (req, res) => {
+router.post("/register-clinic", validateClinicRegistration, async (req, res) => {
   try {
     const {
       clinicName,
@@ -593,7 +599,7 @@ router.post("/register-clinic", async (req, res) => {
   }
 });
 
-router.post("/signup", protect, authorizeRoles("admin"), async (req, res) => {
+router.post("/signup", protect, authorizeRoles("admin"), validateSignup, async (req, res) => {
   try {
     const { name, email, password, role } = req.body;
 
@@ -785,7 +791,7 @@ router.delete("/staff/:id", protect, authorizeRoles("admin"), async (req, res) =
   }
 });
 
-router.post("/login", async (req, res) => {
+router.post("/login", validateLogin, async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) {

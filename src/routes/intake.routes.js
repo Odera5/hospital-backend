@@ -8,6 +8,7 @@ import {
   hasActiveProAccess,
   getUpgradeRequiredMessage,
 } from "../utils/subscriptionAccess.js";
+import { validatePublicIntake } from "../middleware/validators.js";
 
 const router = express.Router();
 
@@ -146,7 +147,7 @@ router.get("/:clinicId/available-slots", async (req, res) => {
 });
 
 // POST /api/intake/:clinicId - Submit a new patient
-router.post("/:clinicId", intakeLimiter, async (req, res) => {
+router.post("/:clinicId", intakeLimiter, validatePublicIntake, async (req, res) => {
   try {
     const { clinicId } = req.params;
 

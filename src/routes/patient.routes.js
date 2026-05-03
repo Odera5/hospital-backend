@@ -14,6 +14,7 @@ import {
 } from "../utils/patientCrypto.js";
 import { serializeRecord } from "../utils/serializers.js";
 import { generatePresignedUrl, deleteObjectFromS3 } from "../lib/s3.js";
+import { validatePatient } from "../middleware/validators.js";
 import {
   buildPatientSearchIndexData,
   clinicHasPendingPatientSearchBackfill,
@@ -590,6 +591,7 @@ router.post(
   "/",
   protect,
   authorizeRoles("admin", "doctor", "nurse"),
+  validatePatient,
   async (req, res) => {
     try {
       const name = normalizeText(req.body?.name);
@@ -724,6 +726,7 @@ router.put(
   "/:id",
   protect,
   authorizeRoles("admin", "doctor"),
+  validatePatient,
   async (req, res) => {
     try {
       const existingPatient = await getPatientOr404(req.params.id, req.user.clinicId);

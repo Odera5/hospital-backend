@@ -12,6 +12,7 @@ import {
   getInvoiceReport,
   getInvoicePatients,
 } from "../controllers/invoiceController.js";
+import { validateInvoice } from "../middleware/validators.js";
 
 const router = express.Router();
 
@@ -22,8 +23,8 @@ router.get("/", getAllInvoices);
 router.get("/report", getInvoiceReport);
 router.get("/patients", getInvoicePatients);
 router.get("/:id", getInvoice);
-router.post("/", createInvoice);
-router.put("/:id", updateInvoice);
+router.post("/", validateInvoice, createInvoice);
+router.put("/:id", validateInvoice, updateInvoice);
 router.put("/:id/issue", issueInvoice);
 router.put("/:id/payment", recordPayment);
 
