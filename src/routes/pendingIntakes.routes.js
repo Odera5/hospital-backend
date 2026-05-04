@@ -102,17 +102,43 @@ const buildReminderUpdate = ({
 // GET /api/pending-intakes - Fetch pending intakes for the clinic
 router.get("/", protect, authorizeRoles("admin", "doctor", "nurse"), async (req, res) => {
   try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    const search = req.query.search ? String(req.query.search).trim() : "";
+
+    const whereClause = {
+      clinicId: req.user.clinicId,
+      status: "pending",
+      ...(search
+        ? {
+            OR: [
+              { name: { contains: search, mode: "insensitive" } },
+              { phone: { contains: search, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    };
+
+    const totalCount = await prisma.pendingIntake.count({
+      where: whereClause,
+    });
+
     const intakes = await prisma.pendingIntake.findMany({
-      where: {
-        clinicId: req.user.clinicId,
-        status: "pending"
-      },
+      where: whereClause,
+      skip,
+      take: limit,
       orderBy: {
         createdAt: "desc"
       }
     });
 
-    res.json(intakes);
+    res.json({
+      intakes,
+      totalCount,
+      totalPages: Math.ceil(totalCount / limit),
+      currentPage: page,
+    });
   } catch (error) {
     console.error("Fetch pending intakes error:", error);
     res.status(500).json({ message: "Failed to fetch pending intakes" });

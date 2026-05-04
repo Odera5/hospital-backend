@@ -10,6 +10,7 @@ import {
   validateLogin,
   validateClinicProfileUpdate
 } from "../middleware/validators.js";
+import { authLimiter } from "../middleware/rateLimit.js";
 import {
   createEmailVerification,
   getVerificationErrorMessage,
@@ -488,7 +489,7 @@ router.post("/clinic-profile/deactivate/verify", protect, authorizeRoles("admin"
   }
 });
 
-router.post("/register-clinic", validateClinicRegistration, async (req, res) => {
+router.post("/register-clinic", authLimiter, validateClinicRegistration, async (req, res) => {
   try {
     const {
       clinicName,
@@ -791,7 +792,7 @@ router.delete("/staff/:id", protect, authorizeRoles("admin"), async (req, res) =
   }
 });
 
-router.post("/login", validateLogin, async (req, res) => {
+router.post("/login", authLimiter, validateLogin, async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) {
@@ -844,9 +845,21 @@ router.post("/login", validateLogin, async (req, res) => {
       data: { refreshToken },
     });
 
+    res.cookie("accessToken", accessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 15 * 60 * 1000, // 15 mins
+    });
+
+    res.cookie("refreshToken", refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+    });
+
     res.json({
-      accessToken,
-      refreshToken,
       user: serializeUser(user),
     });
   } catch (error) {
@@ -912,7 +925,7 @@ router.get("/verify-email", async (req, res) => {
   }
 });
 
-router.post("/resend-verification", async (req, res) => {
+router.post("/resend-verification", authLimiter, async (req, res) => {
   try {
     const email = String(req.body?.email || "")
       .toLowerCase()
@@ -959,7 +972,7 @@ router.post("/resend-verification", async (req, res) => {
 });
 
 router.post("/refresh-token", async (req, res) => {
-  const { refreshToken } = req.body;
+  const refreshToken = req.cookies?.refreshToken || req.body?.refreshToken;
   if (!refreshToken) {
     return res.status(401).json({ message: "Refresh token required" });
   }
@@ -989,7 +1002,13 @@ router.post("/refresh-token", async (req, res) => {
     if (!hasActiveProAccess(user.clinic) && user.role === "admin") {
       const sessionId = user.refreshToken.substring(user.refreshToken.length - 15);
       const newAccessToken = generateAccessToken(user, sessionId);
-      return res.json({ accessToken: newAccessToken });
+      res.cookie("accessToken", newAccessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: 15 * 60 * 1000,
+      });
+      return res.json({ success: true });
     }
 
     if (!hasActiveProAccess(user.clinic)) {
@@ -1001,7 +1020,13 @@ router.post("/refresh-token", async (req, res) => {
 
     const sessionId = user.refreshToken.substring(user.refreshToken.length - 15);
     const newAccessToken = generateAccessToken(user, sessionId);
-    res.json({ accessToken: newAccessToken });
+    res.cookie("accessToken", newAccessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 15 * 60 * 1000,
+    });
+    res.json({ success: true });
   } catch (error) {
     console.error("Refresh token error:", error);
     res.status(403).json({ message: "Refresh token expired or invalid" });
@@ -1009,7 +1034,11 @@ router.post("/refresh-token", async (req, res) => {
 });
 
 router.post("/logout", async (req, res) => {
-  const { refreshToken } = req.body;
+  const refreshToken = req.cookies?.refreshToken || req.body?.refreshToken;
+  
+  res.clearCookie("accessToken");
+  res.clearCookie("refreshToken");
+
   if (!refreshToken) return res.sendStatus(204);
 
   try {

@@ -7,18 +7,18 @@ export const protect = async (req, res, next) => {
       return next();
     }
 
-    const authHeader = req.headers.authorization;
+    let token = req.cookies?.accessToken;
 
-    if (
-      !authHeader ||
-      typeof authHeader !== "string" ||
-      !authHeader.startsWith("Bearer ")
-    ) {
-      return res.status(401).json({ message: "Not authorized, token missing" });
+    if (!token) {
+      const authHeader = req.headers.authorization;
+      if (authHeader && typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
+        token = authHeader.split(" ")[1];
+      }
     }
 
-    const token = authHeader.split(" ")[1];
-    if (!token) return res.status(401).json({ message: "Token not provided" });
+    if (!token) {
+      return res.status(401).json({ message: "Not authorized, token missing" });
+    }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const users = await prisma.$queryRaw`

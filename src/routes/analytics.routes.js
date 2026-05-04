@@ -11,12 +11,22 @@ router.use(enforceSubscriptionState({ allowAdminReadOnly: true }));
 router.get("/dashboard", protect, authorizeRoles("admin", "doctor"), requireProOrEnterprise, async (req, res) => {
   try {
     const clinicId = req.user.clinicId;
+    const { startDate, endDate } = req.query;
+
+    let dateFilter = {};
+    if (startDate) dateFilter.gte = new Date(startDate);
+    if (endDate) {
+       const end = new Date(endDate);
+       end.setHours(23, 59, 59, 999);
+       dateFilter.lte = end;
+    }
 
     // 1. Appointments Data (Completed vs No-Show vs Scheduled vs Cancelled)
     const appointmentStatusCounts = await prisma.appointment.groupBy({
       by: ['status'],
       where: {
-        patient: { clinicId }
+        patient: { clinicId },
+        ...(Object.keys(dateFilter).length > 0 && { date: dateFilter })
       },
       _count: {
         id: true
@@ -27,19 +37,27 @@ router.get("/dashboard", protect, authorizeRoles("admin", "doctor"), requireProO
     // To make it fun for demographics, let's just count gender
     const genderDemographics = await prisma.patient.groupBy({
         by: ['gender'],
-        where: { clinicId, isDeleted: false },
+        where: { 
+          clinicId, 
+          isDeleted: false,
+          ...(Object.keys(dateFilter).length > 0 && { createdAt: dateFilter })
+        },
         _count: { id: true }
     });
 
-    // 3. Simple Revenue (Monthly for last 6 months)
-    const sixMonthsAgo = new Date();
-    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+    // 3. Simple Revenue
+    let invoiceDateFilter = { ...dateFilter };
+    if (!startDate && !endDate) {
+      const sixMonthsAgo = new Date();
+      sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+      invoiceDateFilter = { gte: sixMonthsAgo };
+    }
 
     const invoices = await prisma.invoice.findMany({
       where: {
         patient: { clinicId },
         status: "paid",
-        invoiceDate: { gte: sixMonthsAgo }
+        ...(Object.keys(invoiceDateFilter).length > 0 && { invoiceDate: invoiceDateFilter })
       },
       select: {
          total: true,

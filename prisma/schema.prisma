@@ -140,6 +140,7 @@ model Record {
   consentNotes          String   @default("")
   dentition             String   @default("adult")
   teeth                 Json     @default("[]")
+  vitals                Json     @default("{}")
   attachments           Json     @default("[]")
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
@@ -188,6 +189,7 @@ model WaitingRoom {
   id                    String   @id @default(cuid())
   patientId             String
   patientName           String
+  priority              String   @default("normal")
   status                String   @default("waiting")
   notes                 String   @default("")
   arrivalTime           DateTime @default(now())

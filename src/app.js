@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import path from "path";
 import fs from "fs";
+import cookieParser from "cookie-parser";
 import authRoutes from "./routes/auth.routes.js";
 import patientRoutes from "./routes/patient.routes.js";
 import appointmentRoutes from "./routes/appointment.routes.js";
@@ -62,6 +63,7 @@ app.post(
 );
 
 app.use(express.json({ limit: "1mb" }));
+app.use(cookieParser());
 app.use(logger);
 app.use("/api", apiLimiter);
 

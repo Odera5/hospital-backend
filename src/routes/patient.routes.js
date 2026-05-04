@@ -58,6 +58,41 @@ const normalizeTeeth = (value) => {
 const normalizeAttachments = (attachments) =>
   Array.isArray(attachments) ? attachments : [];
 
+const normalizeVitals = (value) => {
+  if (!value) return null;
+  let parsed = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (typeof parsed !== "object") return null;
+
+  const vitals = {};
+  if (parsed.bloodPressure && typeof parsed.bloodPressure === "string") {
+    // Basic validation for BP format e.g., 120/80
+    if (/^\d{2,3}\/\d{2,3}$/.test(parsed.bloodPressure.trim())) {
+      vitals.bloodPressure = parsed.bloodPressure.trim();
+    }
+  }
+  if (parsed.heartRate && !isNaN(parseInt(parsed.heartRate))) {
+    const hr = parseInt(parsed.heartRate);
+    if (hr > 0 && hr < 300) vitals.heartRate = hr;
+  }
+  if (parsed.temperature && !isNaN(parseFloat(parsed.temperature))) {
+    const temp = parseFloat(parsed.temperature);
+    if (temp > 20 && temp < 45) vitals.temperature = temp;
+  }
+  if (parsed.weight && !isNaN(parseFloat(parsed.weight))) {
+    const weight = parseFloat(parsed.weight);
+    if (weight > 0 && weight < 500) vitals.weight = weight;
+  }
+
+  return Object.keys(vitals).length > 0 ? JSON.stringify(vitals) : null;
+};
+
 const normalizeAttachmentMetadataPayload = (value) => {
   if (!value) return [];
 
@@ -890,6 +925,7 @@ router.post(
         consentDate,
         consentTakenBy,
         consentNotes,
+        vitals,
       } = req.body;
 
       if (
@@ -950,6 +986,7 @@ router.post(
           ...normalizedConsent,
           dentition: dentition === "child" ? "child" : "adult",
           teeth: normalizeTeeth(teeth),
+          vitals: normalizeVitals(vitals),
           attachments,
         },
       });
@@ -1018,6 +1055,7 @@ router.put(
         consentDate,
         consentTakenBy,
         consentNotes,
+        vitals,
       } = req.body;
 
       const normalizedConsent = normalizeConsentPayload({
@@ -1097,6 +1135,7 @@ router.put(
           ...normalizedConsent,
           dentition: dentition === "child" ? "child" : "adult",
           teeth: normalizeTeeth(teeth),
+          vitals: normalizeVitals(vitals),
           attachments: [...retainedAttachments, ...newAttachments],
         },
       });

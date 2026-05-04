@@ -103,7 +103,7 @@ export const getWaitingSummary = async (req, res) => {
 
 export const createWaitingEntry = async (req, res) => {
   try {
-    const { patientId, notes } = req.body;
+    const { patientId, notes, priority } = req.body;
     if (!patientId) {
       return res.status(400).json({ message: "Patient ID is required" });
     }
@@ -139,6 +139,7 @@ export const createWaitingEntry = async (req, res) => {
           patientId,
           patientName: decryptedPatient.name,
           notes: notes?.trim() || "",
+          priority: priority || "normal",
         },
         include: {
           patient: {
@@ -181,7 +182,7 @@ export const createWaitingEntry = async (req, res) => {
 
 export const updateWaitingEntry = async (req, res) => {
   try {
-    const { status, notes } = req.body;
+    const { status, notes, priority } = req.body;
     const item = await prisma.waitingRoom.findUnique({
       where: { id: req.params.id },
       include: {
@@ -214,6 +215,7 @@ export const updateWaitingEntry = async (req, res) => {
       if (field) updateData[field] = new Date();
     }
     if (notes !== undefined) updateData.notes = notes;
+    if (priority) updateData.priority = priority;
 
     const updatedItem = await prisma.waitingRoom.update({
       where: { id: item.id },
