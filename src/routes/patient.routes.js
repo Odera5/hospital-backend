@@ -89,6 +89,10 @@ const normalizeVitals = (value) => {
     const weight = parseFloat(parsed.weight);
     if (weight > 0 && weight < 500) vitals.weight = weight;
   }
+  if (parsed.bloodGlucose && !isNaN(parseFloat(parsed.bloodGlucose))) {
+    const glucose = parseFloat(parsed.bloodGlucose);
+    if (glucose > 0 && glucose < 1000) vitals.bloodGlucose = glucose;
+  }
 
   return Object.keys(vitals).length > 0 ? JSON.stringify(vitals) : null;
 };
