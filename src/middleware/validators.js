@@ -77,12 +77,22 @@ export const validateRecord = [
 // =========================
 // Appointment validation
 // =========================
-export const validateAppointment = [
+export const validateAppointmentCreate = [
   body("patientId").notEmpty().withMessage("Patient ID is required"),
-  body("date").notEmpty().withMessage("Date is required").isISO8601().withMessage("Invalid date format"),
-  body("time").notEmpty().withMessage("Time is required"),
-  body("type").notEmpty().withMessage("Appointment type is required"),
-  body("providerId").optional({ checkFalsy: true }).isString(),
+  body("appointmentDate").notEmpty().withMessage("Date is required").isISO8601().withMessage("Invalid date format"),
+  body("timeSlot").notEmpty().withMessage("Time is required"),
+  body("appointmentType").notEmpty().withMessage("Appointment type is required"),
+  body("dentistId").optional({ checkFalsy: true }).isString(),
+  handleValidationErrors,
+];
+
+export const validateAppointmentUpdate = [
+  body("patientId").optional().notEmpty().withMessage("Patient ID cannot be empty if provided"),
+  body("appointmentDate").optional().isISO8601().withMessage("Invalid date format"),
+  body("timeSlot").optional().notEmpty().withMessage("Time cannot be empty if provided"),
+  body("appointmentType").optional().notEmpty().withMessage("Appointment type cannot be empty if provided"),
+  body("dentistId").optional({ checkFalsy: true }).isString(),
+  body("status").optional().isString(),
   handleValidationErrors,
 ];
 

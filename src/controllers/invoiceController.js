@@ -117,7 +117,7 @@ export const getAllInvoices = async (req, res) => {
         clinicId: req.user.clinicId,
       },
       ...(patientId ? { patientId } : {}),
-      ...(status ? { status } : {}),
+      ...(status === "unpaid" ? { status: { in: ["issued", "overdue"] } } : status ? { status } : {}),
       ...((startDate || endDate)
         ? {
             invoiceDate: {

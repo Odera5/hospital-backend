@@ -236,7 +236,7 @@ const VALID_PATIENT_SORT_FIELDS = new Set([
 ]);
 
 const VALID_TRASH_SORT_FIELDS = new Set([
-  "deletedAt",
+  "updatedAt",
   "createdAt",
   "name",
   "age",
@@ -514,7 +514,7 @@ router.get(
       const requestedSortBy = normalizeText(req.query.sortBy);
       const sortBy = VALID_TRASH_SORT_FIELDS.has(requestedSortBy)
         ? requestedSortBy
-        : "deletedAt";
+        : "updatedAt";
       const sortDirection = normalizeSortDirection(
         req.query.sortDirection,
         "desc",
@@ -526,7 +526,7 @@ router.get(
       if (!shouldPaginate) {
         const trash = await prisma.patient.findMany({
           where: baseWhere,
-          orderBy: { deletedAt: "desc" },
+          orderBy: { updatedAt: "desc" },
         });
 
         return res.json(trash.map(toDecryptedPatient));
@@ -572,7 +572,7 @@ router.get(
 
       const trash = await prisma.patient.findMany({
         where: baseWhere,
-        orderBy: { deletedAt: "desc" },
+        orderBy: { updatedAt: "desc" },
       });
 
       const filteredPatients = trash
@@ -702,6 +702,43 @@ router.post(
         return res.status(400).json({ message: "No patients data provided" });
       }
 
+      const validationErrors = [];
+      const validPatientsData = [];
+
+      patients.forEach((p, index) => {
+        const rowNum = index + 1;
+        const name = normalizeText(p.name);
+        const age = normalizeText(p.age);
+
+        if (!name && !age) {
+          validationErrors.push(`Row ${rowNum}: Missing Name and Age`);
+        } else if (!name) {
+          validationErrors.push(`Row ${rowNum}: Missing Name`);
+        } else if (!age) {
+          validationErrors.push(`Row ${rowNum}: Missing Age`);
+        } else {
+          validPatientsData.push({
+            name,
+            age,
+            gender: normalizeText(p.gender) || "other",
+            phone: normalizeText(p.phone),
+            address: normalizeText(p.address),
+            email: normalizeText(p.email),
+          });
+        }
+      });
+
+      if (validationErrors.length > 0) {
+        const displayErrors = validationErrors.slice(0, 5).join("; ");
+        const moreCount = validationErrors.length - 5;
+        const errorMessage = `Validation failed. ${displayErrors}${moreCount > 0 ? `... and ${moreCount} more errors` : ''}. Please fix your CSV and try again.`;
+        return res.status(400).json({ message: errorMessage });
+      }
+
+      if (validPatientsData.length === 0) {
+        return res.status(400).json({ message: "No valid patient data found to import." });
+      }
+
       let aggregate = await prisma.patient.aggregate({
         where: { clinicId: req.user.clinicId },
         _max: { cardNumberSequence: true },
@@ -709,41 +746,28 @@ router.post(
       
       let nextSequence = (aggregate._max.cardNumberSequence || 0) + 1;
 
-      const newPatients = patients.map((p) => {
-        const name = normalizeText(p.name);
-        if (!name) return null;
-
-        const age = normalizeText(p.age) || "0"; 
-        const gender = normalizeText(p.gender) || "other";
-        const phone = normalizeText(p.phone);
-        const address = normalizeText(p.address);
-        const email = normalizeText(p.email);
-
+      const newPatients = validPatientsData.map((p) => {
         const currentSeq = nextSequence++;
         
         return {
           clinicId: req.user.clinicId,
           cardNumberSequence: currentSeq,
           ...buildPatientSearchIndexData({
-            name,
-            age,
+            name: p.name,
+            age: p.age,
             cardNumber: formatCardNumber(currentSeq),
           }),
           ...toEncryptedPatientData({
-            name,
-            age,
-            gender,
-            phone,
-            address,
-            email,
+            name: p.name,
+            age: p.age,
+            gender: p.gender,
+            phone: p.phone,
+            address: p.address,
+            email: p.email,
             cardNumber: formatCardNumber(currentSeq),
           })
         };
-      }).filter(Boolean);
-
-      if (newPatients.length === 0) {
-        return res.status(400).json({ message: "No valid patient data found to import." });
-      }
+      });
 
       const created = await prisma.patient.createMany({
         data: newPatients,
@@ -823,7 +847,7 @@ router.delete(
 
       const updatedPatient = await prisma.patient.update({
         where: { id: patient.id },
-        data: { isDeleted: true, deletedAt: new Date() },
+        data: { isDeleted: true },
       });
 
       res.json({
@@ -857,7 +881,7 @@ router.put(
 
       const restoredPatient = await prisma.patient.update({
         where: { id: req.params.id },
-        data: { isDeleted: false, deletedAt: null },
+        data: { isDeleted: false },
       });
 
       res.json({
