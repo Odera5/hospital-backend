@@ -14,11 +14,12 @@ let reminderIntervalId = null;
 let reminderJobRunning = false;
 let reminderWorkerDisabled = false;
 
-const isMissingRemindersSentColumnError = (error) =>
+const isMissingDatabaseColumnError = (error) =>
+  error?.code === "P2022" ||
   Boolean(
     error?.message &&
       String(error.message).includes(
-        'The column `Appointment.remindersSent` does not exist in the current database.',
+        "does not exist in the current database.",
       ),
   );
 
@@ -659,10 +660,10 @@ export const processAppointmentReminders = async () => {
       }
     }
   } catch (error) {
-    if (isMissingRemindersSentColumnError(error)) {
+    if (isMissingDatabaseColumnError(error)) {
       reminderWorkerDisabled = true;
       console.error(
-        "Appointment reminder worker disabled: database is missing Appointment.remindersSent. Run Prisma migrations on the deployed database.",
+        `Appointment reminder worker disabled: database schema is missing one or more required columns (${error?.meta?.column || error?.message || "unknown column"}). Run Prisma migrations on the deployed database.`,
       );
       return;
     }
