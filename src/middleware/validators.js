@@ -28,7 +28,9 @@ export const validateSignup = [
   body("name").trim().notEmpty().withMessage("Name is required"),
   body("email").trim().notEmpty().withMessage("Email is required").isEmail().withMessage("Invalid email address"),
   body("password").notEmpty().withMessage("Password is required").isLength({ min: 6 }).withMessage("Password must be at least 6 characters"),
-  body("role").optional().isIn(["admin", "doctor", "nurse"]).withMessage("Invalid role"),
+  body("role").optional().isIn(["branch_manager", "doctor", "nurse"]).withMessage("Invalid role"),
+  body("assignedBranchIds").optional().isArray().withMessage("Assigned branches must be an array"),
+  body("assignedBranchIds.*").optional().isString().withMessage("Assigned branch IDs must be strings"),
   handleValidationErrors,
 ];
 
@@ -46,9 +48,19 @@ export const validateClinicProfileUpdate = [
   body("clinicCity").optional({ checkFalsy: true }).isString(),
   body("clinicAddress").optional({ checkFalsy: true }).isString(),
   body("contactPerson").optional({ checkFalsy: true }).isString(),
-  body("reminderTimezone").optional({ checkFalsy: true }).isString(),
-  body("reminderWindowStartHour").optional({ checkFalsy: true }).isInt(),
-  body("reminderWindowEndHour").optional({ checkFalsy: true }).isInt(),
+  body("reminderOffsets").optional().isArray(),
+  body("reminderOffsets.*").optional().isInt({ min: 1 }),
+  handleValidationErrors,
+];
+
+export const validateBranchPayload = [
+  body("name").trim().notEmpty().withMessage("Branch name is required"),
+  body("city").trim().notEmpty().withMessage("Branch city is required"),
+  body("area").trim().notEmpty().withMessage("Branch area is required"),
+  body("country").optional({ checkFalsy: true }).isString(),
+  body("address").optional({ checkFalsy: true }).isString(),
+  body("phone").optional({ checkFalsy: true }).isString(),
+  body("isActive").optional().isBoolean(),
   handleValidationErrors,
 ];
 
@@ -116,6 +128,7 @@ export const validatePublicIntake = [
 // =========================
 export const validatePaystackInitialization = [
   body("interval").optional().isIn(["monthly", "annually"]).withMessage("Interval must be monthly or annually"),
+  body("plan").optional().isIn(["PRO", "ENTERPRISE"]).withMessage("Plan must be PRO or ENTERPRISE"),
   handleValidationErrors,
 ];
 

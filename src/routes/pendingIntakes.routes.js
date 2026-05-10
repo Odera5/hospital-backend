@@ -100,7 +100,7 @@ const buildReminderUpdate = ({
 };
 
 // GET /api/pending-intakes - Fetch pending intakes for the clinic
-router.get("/", protect, authorizeRoles("admin", "doctor", "nurse"), async (req, res) => {
+router.get("/", protect, authorizeRoles("admin", "branch_manager", "doctor", "nurse"), async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
@@ -109,6 +109,7 @@ router.get("/", protect, authorizeRoles("admin", "doctor", "nurse"), async (req,
 
     const whereClause = {
       clinicId: req.user.clinicId,
+      branchId: req.user.branchId,
       status: "pending",
       ...(search
         ? {
@@ -146,10 +147,11 @@ router.get("/", protect, authorizeRoles("admin", "doctor", "nurse"), async (req,
 });
 
 // POST /api/pending-intakes/:id/approve - Approve a pending intake
-router.post("/:id/approve", protect, authorizeRoles("admin", "doctor", "nurse"), async (req, res) => {
+router.post("/:id/approve", protect, authorizeRoles("admin", "branch_manager", "doctor", "nurse"), async (req, res) => {
   try {
     const { id } = req.params;
     const clinicId = req.user.clinicId;
+    const branchId = req.user.branchId;
     const assignedDate = String(req.body?.assignedDate || "").trim();
     const assignedTime = String(req.body?.assignedTime || "").trim();
 
@@ -181,6 +183,7 @@ router.post("/:id/approve", protect, authorizeRoles("admin", "doctor", "nurse"),
           if (
             !pendingIntake ||
             pendingIntake.clinicId !== clinicId ||
+            pendingIntake.branchId !== branchId ||
             pendingIntake.status !== "pending"
           ) {
             const error = new Error("Pending intake not found or already processed.");
@@ -198,6 +201,7 @@ router.post("/:id/approve", protect, authorizeRoles("admin", "doctor", "nurse"),
           const createdPatient = await tx.patient.create({
             data: {
               clinicId,
+              branchId,
               cardNumberSequence: nextSequence,
               ...toEncryptedPatientData({
                 name: pendingIntake.name,
@@ -228,7 +232,7 @@ router.post("/:id/approve", protect, authorizeRoles("admin", "doctor", "nurse"),
 
             const dayAppointments = await tx.appointment.findMany({
               where: {
-                patient: { clinicId, isDeleted: false },
+                patient: { clinicId, branchId, isDeleted: false },
                 appointmentDate: {
                   gte: startOfDay,
                   lte: endOfDay,
@@ -316,16 +320,17 @@ router.post("/:id/approve", protect, authorizeRoles("admin", "doctor", "nurse"),
 });
 
 // DELETE /api/pending-intakes/:id - Reject a pending intake
-router.delete("/:id", protect, authorizeRoles("admin", "doctor", "nurse"), async (req, res) => {
+router.delete("/:id", protect, authorizeRoles("admin", "branch_manager", "doctor", "nurse"), async (req, res) => {
   try {
     const { id } = req.params;
     const clinicId = req.user.clinicId;
+    const branchId = req.user.branchId;
 
     const pendingIntake = await prisma.pendingIntake.findUnique({
       where: { id }
     });
 
-    if (!pendingIntake || pendingIntake.clinicId !== clinicId || pendingIntake.status !== "pending") {
+    if (!pendingIntake || pendingIntake.clinicId !== clinicId || pendingIntake.branchId !== branchId || pendingIntake.status !== "pending") {
       return res.status(404).json({ message: "Pending intake not found or already processed." });
     }
 

@@ -28,23 +28,36 @@ const getMonthBounds = (value = new Date()) => {
 router.get(
   "/summary",
   protect,
-  authorizeRoles("admin", "doctor", "nurse"),
+  authorizeRoles("admin", "branch_manager", "doctor", "nurse"),
   async (req, res) => {
     try {
       const clinicId = req.user.clinicId;
+      const branchId = req.user.branchId;
       const { start: startOfDay, end: endOfDay } = getDayBounds();
       const { start: startOfMonth, end: endOfMonth } = getMonthBounds();
 
-      const patientWhere = { clinicId, isDeleted: false };
-      const trashWhere = { clinicId, isDeleted: true };
+      const patientWhere = { clinicId, branchId, isDeleted: false };
+      const trashWhere = { clinicId, branchId, isDeleted: true };
       const appointmentClinicWhere = {
         patient: { clinicId, isDeleted: false },
+        OR: [
+          { branchId: req.user.branchId },
+          { branchId: null, patient: { branchId: req.user.branchId } }
+        ],
       };
       const waitingClinicWhere = {
         patient: { clinicId, isDeleted: false },
+        OR: [
+          { branchId: req.user.branchId },
+          { branchId: null, patient: { branchId: req.user.branchId } }
+        ],
       };
       const invoiceClinicWhere = {
         patient: { clinicId },
+        OR: [
+          { branchId: req.user.branchId },
+          { branchId: null, patient: { branchId: req.user.branchId } }
+        ],
         status: { not: "draft" },
         invoiceDate: {
           gte: startOfMonth,
@@ -105,7 +118,7 @@ router.get(
           },
         }),
         prisma.pendingIntake.count({
-          where: { clinicId, status: "pending" },
+          where: { clinicId, branchId, status: "pending" },
         }),
       ]);
 
@@ -143,7 +156,8 @@ router.get(
         },
       });
     } catch (error) {
-      console.error("Dashboard summary error:", error.message);
+      require('fs').writeFileSync('dashboard-error.log', error.stack || error.message);
+      console.error("Dashboard summary error:", error);
       return res.status(500).json({ message: "Failed to load dashboard summary" });
     }
   },

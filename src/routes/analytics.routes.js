@@ -8,9 +8,10 @@ const router = express.Router();
 router.use(protect);
 router.use(enforceSubscriptionState({ allowAdminReadOnly: true }));
 
-router.get("/dashboard", protect, authorizeRoles("admin", "doctor"), requireProOrEnterprise, async (req, res) => {
+router.get("/dashboard", protect, authorizeRoles("admin", "branch_manager", "doctor"), requireProOrEnterprise, async (req, res) => {
   try {
     const clinicId = req.user.clinicId;
+    const branchId = req.user.branchId;
     const { startDate, endDate } = req.query;
 
     let dateFilter = {};
@@ -25,8 +26,8 @@ router.get("/dashboard", protect, authorizeRoles("admin", "doctor"), requireProO
     const appointmentStatusCounts = await prisma.appointment.groupBy({
       by: ['status'],
       where: {
-        patient: { clinicId },
-        ...(Object.keys(dateFilter).length > 0 && { date: dateFilter })
+        patient: { clinicId, branchId },
+        ...(Object.keys(dateFilter).length > 0 && { appointmentDate: dateFilter })
       },
       _count: {
         id: true
@@ -38,7 +39,8 @@ router.get("/dashboard", protect, authorizeRoles("admin", "doctor"), requireProO
     const genderDemographics = await prisma.patient.groupBy({
         by: ['gender'],
         where: { 
-          clinicId, 
+          clinicId,
+          branchId,
           isDeleted: false,
           ...(Object.keys(dateFilter).length > 0 && { createdAt: dateFilter })
         },
@@ -55,7 +57,7 @@ router.get("/dashboard", protect, authorizeRoles("admin", "doctor"), requireProO
 
     const invoices = await prisma.invoice.findMany({
       where: {
-        patient: { clinicId },
+        patient: { clinicId, branchId },
         status: "paid",
         ...(Object.keys(invoiceDateFilter).length > 0 && { invoiceDate: invoiceDateFilter })
       },
@@ -85,10 +87,118 @@ router.get("/dashboard", protect, authorizeRoles("admin", "doctor"), requireProO
         revenue: revenueByMonthMap[m] || 0
     }));
 
+    // 4. Clinical Insights
+    const records = await prisma.record.findMany({
+      where: {
+        patient: { clinicId, branchId },
+        isDeleted: false,
+        ...(Object.keys(dateFilter).length > 0 && { createdAt: dateFilter })
+      },
+      select: {
+        diagnosis: true,
+        presentingComplaint: true,
+        patient: {
+          select: { ageNumber: true }
+        }
+      }
+    });
+
+    const diagnosisMap = {};
+    const complaintMap = {};
+    const ageComplaintMap = { "0-18": {}, "19-35": {}, "36-50": {}, "51+": {} };
+
+    const extractItems = (text) => {
+      if (!text) return [];
+      return text
+        .split(/[\n\r,;]+/)
+        .map(item => item.trim().toLowerCase())
+        .map(item => item.replace(/^(c\/o\s*|complains of\s*|complaint of\s*|dx:\s*|diagnosis:\s*|\-\s*|\*\s*|\d+\.\s*)/i, '').trim())
+        .map(item => item.replace(/\.$/, '').trim())
+        .filter(item => item.length > 2);
+    };
+
+    records.forEach(r => {
+      const diags = extractItems(r.diagnosis);
+      const comps = extractItems(r.presentingComplaint);
+      const age = r.patient?.ageNumber || 0;
+
+      let ageGroup = "51+";
+      if (age <= 18) ageGroup = "0-18";
+      else if (age <= 35) ageGroup = "19-35";
+      else if (age <= 50) ageGroup = "36-50";
+
+      diags.forEach(diag => {
+        diagnosisMap[diag] = (diagnosisMap[diag] || 0) + 1;
+      });
+
+      comps.forEach(comp => {
+        complaintMap[comp] = (complaintMap[comp] || 0) + 1;
+        ageComplaintMap[ageGroup][comp] = (ageComplaintMap[ageGroup][comp] || 0) + 1;
+      });
+    });
+
+    const topDiagnoses = Object.entries(diagnosisMap).sort((a,b) => b[1] - a[1]).slice(0, 5).map(x => ({ name: x[0], count: x[1] }));
+    const topComplaints = Object.entries(complaintMap).sort((a,b) => b[1] - a[1]).slice(0, 5).map(x => ({ name: x[0], count: x[1] }));
+    
+    const complaintsByAge = Object.keys(ageComplaintMap).map(group => {
+       const topComp = Object.entries(ageComplaintMap[group]).sort((a,b) => b[1] - a[1])[0];
+       return {
+         ageGroup: group,
+         topComplaint: topComp ? topComp[0] : "None",
+         count: topComp ? topComp[1] : 0
+       };
+    });
+
+    // 5. Enterprise Cross-Branch Insights
+    let enterpriseData = null;
+    if (req.user.role === "admin" && req.user.clinic?.plan === "ENTERPRISE") {
+      const branches = await prisma.branch.findMany({ where: { clinicId }, select: { id: true, name: true } });
+      const branchMap = branches.reduce((acc, b) => ({ ...acc, [b.id]: b.name }), {});
+
+      const crossInvoices = await prisma.invoice.findMany({
+        where: {
+          patient: { clinicId },
+          status: "paid",
+          ...(Object.keys(invoiceDateFilter).length > 0 && { invoiceDate: invoiceDateFilter })
+        },
+        select: { branchId: true, total: true }
+      });
+
+      const branchRevenue = {};
+      crossInvoices.forEach(inv => {
+        const bId = inv.branchId;
+        if (bId) {
+           branchRevenue[bId] = (branchRevenue[bId] || 0) + inv.total;
+        }
+      });
+
+      const crossAppointments = await prisma.appointment.groupBy({
+        by: ['branchId'],
+        where: {
+          patient: { clinicId },
+          ...(Object.keys(dateFilter).length > 0 && { appointmentDate: dateFilter })
+        },
+        _count: { id: true }
+      });
+
+      enterpriseData = {
+        revenueByBranch: Object.entries(branchRevenue).map(([bId, total]) => ({ branchName: branchMap[bId] || 'Unknown', total })).sort((a,b) => b.total - a.total),
+        appointmentsByBranch: crossAppointments.filter(a => a.branchId).map(a => ({ branchName: branchMap[a.branchId] || 'Unknown', count: a._count.id })).sort((a,b) => b.count - a.count)
+      };
+    }
+
     res.json({
       appointments: appointmentStatusCounts.map(a => ({ status: a.status, count: a._count.id })),
       demographics: genderDemographics.map(g => ({ gender: g.gender, count: g._count.id })),
-      revenueByMonth
+      revenueByMonth,
+      clinicalInsights: {
+        topDiagnoses,
+        totalDiagnoses: Object.keys(diagnosisMap).length,
+        topComplaints,
+        totalComplaints: Object.keys(complaintMap).length,
+        complaintsByAge
+      },
+      enterprise: enterpriseData
     });
 
   } catch (error) {

@@ -4,6 +4,7 @@ import {
   generatePaystackManageLink,
   initializePaystackSubscription,
   parseRequestedBillingInterval,
+  parseRequestedPlanType,
   processPaystackWebhookEvent,
   serializeBillingClinic,
   verifyPaystackSignature,
@@ -40,6 +41,7 @@ export const getBillingOverview = async (req, res) => {
 export const initializePaystackCheckout = async (req, res) => {
   try {
     const interval = parseRequestedBillingInterval(req.body?.interval);
+    const planType = parseRequestedPlanType(req.body?.plan);
 
     const clinic = await prisma.clinic.findUnique({
       where: { id: req.user.clinicId },
@@ -53,6 +55,7 @@ export const initializePaystackCheckout = async (req, res) => {
       clinic,
       actor: req.user,
       interval,
+      planType,
     });
 
     return res.status(201).json(checkout);

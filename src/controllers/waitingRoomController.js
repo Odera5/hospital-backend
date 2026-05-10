@@ -12,6 +12,7 @@ const STATUS_TIMES = {
 const waitingPatientSelect = {
   id: true,
   clinicId: true,
+  branchId: true,
   isDeleted: true,
   name: true,
   cardNumber: true,
@@ -45,6 +46,10 @@ export const getWaitingList = async (req, res) => {
     const items = await prisma.waitingRoom.findMany({
       where: {
         patient: { clinicId: req.user.clinicId, isDeleted: false },
+        OR: [
+          { branchId: req.user.branchId },
+          { branchId: null, patient: { branchId: req.user.branchId } }
+        ],
         ...(status ? { status } : {}),
         ...(search
           ? {
@@ -74,6 +79,10 @@ export const getWaitingSummary = async (req, res) => {
   try {
     const baseWhere = {
       patient: { clinicId: req.user.clinicId, isDeleted: false },
+      OR: [
+        { branchId: req.user.branchId },
+        { branchId: null, patient: { branchId: req.user.branchId } }
+      ],
     };
 
     const [statusGroups, total] = await Promise.all([
@@ -138,6 +147,7 @@ export const createWaitingEntry = async (req, res) => {
         data: {
           patientId,
           patientName: decryptedPatient.name,
+          branchId: req.user.branchId,
           notes: notes?.trim() || "",
           priority: priority || "normal",
         },
@@ -192,7 +202,7 @@ export const updateWaitingEntry = async (req, res) => {
       },
     });
 
-    if (!item || item.patient.clinicId !== req.user.clinicId) {
+    if (!item || item.patient.clinicId !== req.user.clinicId || (item.branchId !== req.user.branchId && (item.branchId !== null || item.patient.branchId !== req.user.branchId))) {
       return res.status(404).json({ message: "Queue item not found" });
     }
 
@@ -251,11 +261,11 @@ export const deleteWaitingEntry = async (req, res) => {
       where: { id: req.params.id },
       include: {
         patient: {
-          select: { clinicId: true },
+          select: { clinicId: true, branchId: true },
         },
       },
     });
-    if (!item || item.patient?.clinicId !== req.user.clinicId) {
+    if (!item || item.patient?.clinicId !== req.user.clinicId || (item.branchId !== req.user.branchId && (item.branchId !== null || item.patient?.branchId !== req.user.branchId))) {
       return res.status(404).json({ message: "Queue item not found" });
     }
 

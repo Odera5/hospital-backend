@@ -34,12 +34,16 @@ router.delete("/:id", async (req, res) => {
       where: { id: req.params.id },
       include: {
         patient: {
-          select: { clinicId: true },
+          select: { clinicId: true, branchId: true },
         },
       },
     });
 
-    if (!invoice || invoice.patient?.clinicId !== req.user.clinicId) {
+    if (
+      !invoice ||
+      invoice.patient?.clinicId !== req.user.clinicId ||
+      invoice.patient?.branchId !== req.user.branchId
+    ) {
       return res.status(404).json({ message: "Invoice not found" });
     }
 

@@ -42,7 +42,28 @@ const intakeAccessClinicSelect = {
   paystackSubscriptionStatus: true,
 };
 
-const validateIntakeAccess = (clinic, accessToken) => {
+const getActiveBranchForIntake = async ({ clinicId, branchId = "", accessToken = "" }) =>
+  prisma.branch.findFirst({
+    where: {
+      clinicId,
+      ...(branchId
+        ? { id: branchId }
+        : accessToken
+          ? { intakePublicToken: accessToken }
+          : {}),
+      isActive: true,
+    },
+    select: {
+      id: true,
+      name: true,
+      city: true,
+      area: true,
+      intakeEnabled: true,
+      intakePublicToken: true,
+    },
+  });
+
+const validateIntakeAccess = (clinic, branch, accessToken) => {
   if (!clinic) {
     return "Clinic not found";
   }
@@ -51,11 +72,15 @@ const validateIntakeAccess = (clinic, accessToken) => {
     return getUpgradeRequiredMessage();
   }
 
-  if (!clinic.intakeEnabled) {
-    return "This clinic has not enabled patient intake access right now.";
+  if (!branch) {
+    return "This patient intake link is invalid or has been revoked.";
   }
 
-  if (!clinic.intakePublicToken || !accessToken || accessToken !== clinic.intakePublicToken) {
+  if (!branch.intakeEnabled) {
+    return "This branch has not enabled patient intake access right now.";
+  }
+
+  if (!branch.intakePublicToken || !accessToken || accessToken !== branch.intakePublicToken) {
     return "This patient intake link is invalid or has been revoked.";
   }
 
@@ -66,22 +91,35 @@ const validateIntakeAccess = (clinic, accessToken) => {
 router.get("/:clinicId", async (req, res) => {
   try {
     const { clinicId } = req.params;
+    const accessToken = String(req.query?.access || "").trim();
+    const requestedBranchId = String(req.query?.branchId || "").trim();
     
     const clinic = await prisma.clinic.findUnique({
       where: { id: clinicId },
       select: intakeAccessClinicSelect,
     });
 
-    const accessError = validateIntakeAccess(
-      clinic,
-      String(req.query?.access || "").trim(),
-    );
+    const branch = await getActiveBranchForIntake({
+      clinicId,
+      branchId: requestedBranchId,
+      accessToken,
+    });
+
+    const accessError = validateIntakeAccess(clinic, branch, accessToken);
     if (accessError) {
       return res.status(clinic ? 403 : 404).json({ message: accessError });
     }
 
     const { intakePublicToken, ...publicClinic } = clinic;
-    res.json(publicClinic);
+    res.json({
+      ...publicClinic,
+      branch: {
+        id: branch.id,
+        name: branch.name,
+        city: branch.city,
+        area: branch.area,
+      },
+    });
   } catch (error) {
     console.error("Intake Fetch Error:", error);
     res.status(500).json({ message: "Failed to fetch clinic details" });
@@ -93,6 +131,8 @@ router.get("/:clinicId/available-slots", async (req, res) => {
   try {
     const { clinicId } = req.params;
     const { date, duration } = req.query;
+    const accessToken = String(req.query?.access || "").trim();
+    const requestedBranchId = String(req.query?.branchId || "").trim();
 
     if (!date) {
       return res.status(400).json({ message: "Date required" });
@@ -103,10 +143,13 @@ router.get("/:clinicId/available-slots", async (req, res) => {
       select: intakeAccessClinicSelect,
     });
 
-    const accessError = validateIntakeAccess(
-      clinic,
-      String(req.query?.access || "").trim(),
-    );
+    const branch = await getActiveBranchForIntake({
+      clinicId,
+      branchId: requestedBranchId,
+      accessToken,
+    });
+
+    const accessError = validateIntakeAccess(clinic, branch, accessToken);
     if (accessError) {
       return res.status(clinic ? 403 : 404).json({ message: accessError });
     }
@@ -119,7 +162,7 @@ router.get("/:clinicId/available-slots", async (req, res) => {
 
     const booked = await prisma.appointment.findMany({
       where: {
-        patient: { clinicId, isDeleted: false },
+        patient: { clinicId, branchId: branch.id, isDeleted: false },
         appointmentDate: {
           gte: startOfDay,
           lte: endOfDay,
@@ -156,10 +199,15 @@ router.post("/:clinicId", intakeLimiter, validatePublicIntake, async (req, res) 
       select: intakeAccessClinicSelect,
     });
 
-    const accessError = validateIntakeAccess(
-      clinic,
-      String(req.query?.access || req.body?.access || "").trim(),
-    );
+    const accessToken = String(req.query?.access || req.body?.access || "").trim();
+    const requestedBranchId = String(req.query?.branchId || req.body?.branchId || "").trim();
+    const branch = await getActiveBranchForIntake({
+      clinicId,
+      branchId: requestedBranchId,
+      accessToken,
+    });
+
+    const accessError = validateIntakeAccess(clinic, branch, accessToken);
     if (accessError) {
       return res.status(clinic ? 403 : 404).json({ message: accessError });
     }
@@ -180,6 +228,7 @@ router.post("/:clinicId", intakeLimiter, validatePublicIntake, async (req, res) 
     const pendingIntake = await prisma.pendingIntake.create({
       data: {
         clinicId,
+        branchId: branch.id,
         name,
         age,
         gender,

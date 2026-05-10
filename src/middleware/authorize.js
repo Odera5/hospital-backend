@@ -1,5 +1,11 @@
 import jwt from "jsonwebtoken";
 import { prisma } from "../lib/prisma.js";
+import {
+  getAllowedActiveBranches,
+  resolveActiveBranch,
+  serializeBranch,
+  STAFF_BRANCH_ACCESS_MESSAGE,
+} from "../utils/branchAccess.js";
 
 export const protect = async (req, res, next) => {
   try {
@@ -27,6 +33,7 @@ export const protect = async (req, res, next) => {
         u.name,
         u.email,
         u.role,
+        u."assignedBranchIds",
         u."isActive",
         u."clinicId",
         u."refreshToken",
@@ -58,6 +65,36 @@ export const protect = async (req, res, next) => {
       subscriptionEnds: user.clinicSubscriptionEnds || null,
       paystackSubscriptionStatus: user.clinicPaystackSubscriptionStatus || null,
     };
+
+    const branches = await getAllowedActiveBranches({
+      clinicId: user.clinicId,
+      role: user.role,
+      assignedBranchIds: user.assignedBranchIds,
+    });
+
+    const requestedBranchId = String(
+      req.headers?.["x-branch-id"] || req.query?.branchId || "",
+    ).trim();
+
+    if (branches.length === 0 && user.role !== "admin") {
+      return res.status(403).json({
+        message: STAFF_BRANCH_ACCESS_MESSAGE,
+      });
+    }
+
+    if (branches.length > 0) {
+      const { activeBranch } = resolveActiveBranch(branches, requestedBranchId);
+
+      if (requestedBranchId && !activeBranch) {
+        return res.status(403).json({
+          message: "The selected branch is not available for this staff account.",
+        });
+      }
+
+      user.branchId = activeBranch.id;
+      user.branch = serializeBranch(activeBranch);
+      user.availableBranches = branches.map(serializeBranch);
+    }
 
     if (decoded.sessionId) {
       if (!user.refreshToken) {

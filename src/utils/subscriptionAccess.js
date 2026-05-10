@@ -24,16 +24,19 @@ export const hasFutureSubscriptionWindow = (clinic) => {
 };
 
 export const hasActiveProAccess = (clinic) =>
-  clinic?.plan === "PRO" &&
+  ["PRO", "ENTERPRISE"].includes(clinic?.plan) &&
   (hasActivePaidSubscription(clinic) || hasFutureSubscriptionWindow(clinic));
 
 export const hasReminderAccess = (clinic) => hasActiveProAccess(clinic);
 
+export const hasEnterpriseAccess = (clinic) =>
+  clinic?.plan === "ENTERPRISE" && hasActiveProAccess(clinic);
+
 export const isSubscriptionExpired = (clinic) =>
-  clinic?.plan === "PRO" && !hasActiveProAccess(clinic);
+  ["PRO", "ENTERPRISE"].includes(clinic?.plan) && !hasActiveProAccess(clinic);
 
 export const isTrialingClinic = (clinic) =>
-  clinic?.plan === "PRO" &&
+  ["PRO", "ENTERPRISE"].includes(clinic?.plan) &&
   !hasActivePaidSubscription(clinic) &&
   hasFutureSubscriptionWindow(clinic);
 

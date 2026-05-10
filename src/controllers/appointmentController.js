@@ -15,6 +15,7 @@ import {
 const appointmentPatientSelect = {
   id: true,
   clinicId: true,
+  branchId: true,
   isDeleted: true,
   name: true,
   cardNumber: true,
@@ -238,6 +239,10 @@ export const getAllAppointments = async (req, res) => {
         clinicId: req.user.clinicId,
         isDeleted: false,
       },
+      OR: [
+        { branchId: req.user.branchId },
+        { branchId: null, patient: { branchId: req.user.branchId } }
+      ],
       ...(patientId ? { patientId } : {}),
       ...(dentistId ? { dentistId, dentist: { clinicId: req.user.clinicId } } : {}),
       ...(buildDateFilter(startDate, endDate)
@@ -325,7 +330,14 @@ export const getAppointment = async (req, res) => {
     const appointment = await prisma.appointment.findFirst({
       where: {
         id: req.params.id,
-        patient: { clinicId: req.user.clinicId, isDeleted: false },
+        patient: {
+          clinicId: req.user.clinicId,
+          isDeleted: false,
+        },
+        OR: [
+          { branchId: req.user.branchId },
+          { branchId: null, patient: { branchId: req.user.branchId } }
+        ],
       },
       include: {
         patient: {
@@ -418,6 +430,10 @@ export const createAppointment = async (req, res) => {
     const dayAppointments = await prisma.appointment.findMany({
       where: {
         patient: { clinicId: req.user.clinicId, isDeleted: false },
+        OR: [
+          { branchId: req.user.branchId },
+          { branchId: null, patient: { branchId: req.user.branchId } }
+        ],
         appointmentDate: {
           gte: startOfDay,
           lte: endOfDay,
@@ -449,6 +465,7 @@ export const createAppointment = async (req, res) => {
         timeSlot,
         appointmentType: appointmentType || "checkup",
         dentistId: dentistId || null,
+        branchId: req.user.branchId,
         notes: notes || "",
         duration: Number(duration) || 30,
         patientResponseToken: createAppointmentResponseToken(),
@@ -505,7 +522,7 @@ export const updateAppointment = async (req, res) => {
       include: { patient: true },
     });
 
-    if (!appointment || appointment.patient.clinicId !== req.user.clinicId) {
+    if (!appointment || appointment.patient.clinicId !== req.user.clinicId || (appointment.branchId !== req.user.branchId && (appointment.branchId !== null || appointment.patient.branchId !== req.user.branchId))) {
       return res.status(404).json({ message: "Appointment not found" });
     }
 
@@ -587,6 +604,10 @@ export const updateAppointment = async (req, res) => {
       const dayAppointments = await prisma.appointment.findMany({
         where: {
           patient: { clinicId: req.user.clinicId, isDeleted: false },
+          OR: [
+            { branchId: req.user.branchId },
+            { branchId: null, patient: { branchId: req.user.branchId } }
+          ],
           appointmentDate: {
             gte: startOfDay,
             lte: endOfDay,
@@ -692,12 +713,12 @@ export const deleteAppointment = async (req, res) => {
       where: { id: req.params.id },
       include: {
         patient: {
-          select: { clinicId: true },
+          select: { clinicId: true, branchId: true },
         },
       },
     });
 
-    if (!appointment || appointment.patient?.clinicId !== req.user.clinicId) {
+    if (!appointment || appointment.patient?.clinicId !== req.user.clinicId || (appointment.branchId !== req.user.branchId && (appointment.branchId !== null || appointment.patient?.branchId !== req.user.branchId))) {
       return res.status(404).json({ message: "Appointment not found" });
     }
 
@@ -910,7 +931,7 @@ export const getAvailableSlots = async (req, res) => {
 
     const booked = await prisma.appointment.findMany({
       where: {
-        patient: { clinicId: req.user.clinicId, isDeleted: false },
+        patient: { clinicId: req.user.clinicId, branchId: req.user.branchId, isDeleted: false },
         appointmentDate: {
           gte: startOfDay,
           lte: endOfDay,

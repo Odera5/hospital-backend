@@ -24,7 +24,7 @@ const collectionCandidates = {
 };
 
 const normalizeRole = (role) =>
-  ["admin", "doctor", "nurse"].includes(role) ? role : "nurse";
+  ["admin", "branch_manager", "doctor", "nurse"].includes(role) ? role : "nurse";
 const normalizeIsActive = (value) =>
   typeof value === "boolean" ? value : true;
 

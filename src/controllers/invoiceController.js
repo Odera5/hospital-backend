@@ -7,6 +7,7 @@ import { toDecryptedPatient } from "../utils/patientCrypto.js";
 const invoicePatientSelect = {
   id: true,
   clinicId: true,
+  branchId: true,
   isDeleted: true,
   name: true,
   cardNumber: true,
@@ -116,6 +117,10 @@ export const getAllInvoices = async (req, res) => {
       patient: {
         clinicId: req.user.clinicId,
       },
+      OR: [
+        { branchId: req.user.branchId },
+        { branchId: null, patient: { branchId: req.user.branchId } }
+      ],
       ...(patientId ? { patientId } : {}),
       ...(status === "unpaid" ? { status: { in: ["issued", "overdue"] } } : status ? { status } : {}),
       ...((startDate || endDate)
@@ -176,7 +181,7 @@ export const getInvoice = async (req, res) => {
       include: invoiceInclude,
     });
 
-    if (!invoice || invoice.patient.clinicId !== req.user.clinicId) {
+    if (!invoice || invoice.patient.clinicId !== req.user.clinicId || (invoice.branchId !== req.user.branchId && (invoice.branchId !== null || invoice.patient.branchId !== req.user.branchId))) {
       return res.status(404).json({ message: "Invoice not found" });
     }
 
@@ -225,6 +230,7 @@ export const createInvoice = async (req, res) => {
       data: {
         invoiceNumber: await generateInvoiceNumber(),
         patientId,
+        branchId: req.user.branchId,
         treatmentPlanId: treatmentPlanId || null,
         items: normalizedItems,
         payments: [],
@@ -275,9 +281,9 @@ export const updateInvoice = async (req, res) => {
 
     const invoice = await prisma.invoice.findUnique({
       where: { id: req.params.id },
-      include: { patient: { select: { clinicId: true } } },
+      include: { patient: { select: { clinicId: true, branchId: true } } },
     });
-    if (!invoice || invoice.patient.clinicId !== req.user.clinicId) {
+    if (!invoice || invoice.patient.clinicId !== req.user.clinicId || (invoice.branchId !== req.user.branchId && (invoice.branchId !== null || invoice.patient.branchId !== req.user.branchId))) {
       return res.status(404).json({ message: "Invoice not found" });
     }
 
@@ -362,9 +368,9 @@ export const issueInvoice = async (req, res) => {
   try {
     const invoice = await prisma.invoice.findUnique({
       where: { id: req.params.id },
-      include: { patient: { select: { clinicId: true } } },
+      include: { patient: { select: { clinicId: true, branchId: true } } },
     });
-    if (!invoice || invoice.patient.clinicId !== req.user.clinicId) {
+    if (!invoice || invoice.patient.clinicId !== req.user.clinicId || (invoice.branchId !== req.user.branchId && (invoice.branchId !== null || invoice.patient.branchId !== req.user.branchId))) {
       return res.status(404).json({ message: "Invoice not found" });
     }
 
@@ -403,9 +409,9 @@ export const recordPayment = async (req, res) => {
 
     const invoice = await prisma.invoice.findUnique({
       where: { id: req.params.id },
-      include: { patient: { select: { clinicId: true } } },
+      include: { patient: { select: { clinicId: true, branchId: true } } },
     });
-    if (!invoice || invoice.patient.clinicId !== req.user.clinicId) {
+    if (!invoice || invoice.patient.clinicId !== req.user.clinicId || (invoice.branchId !== req.user.branchId && (invoice.branchId !== null || invoice.patient.branchId !== req.user.branchId))) {
       return res.status(404).json({ message: "Invoice not found" });
     }
 
@@ -480,6 +486,10 @@ export const getInvoiceReport = async (req, res) => {
       patient: {
         clinicId: req.user.clinicId,
       },
+      OR: [
+        { branchId: req.user.branchId },
+        { branchId: null, patient: { branchId: req.user.branchId } }
+      ],
       ...(patientId ? { patientId } : {}),
       status: { not: "draft" },
       ...((startDate || endDate)
@@ -515,6 +525,10 @@ export const getInvoiceReport = async (req, res) => {
       prisma.invoice.count({
         where: {
           patient: { clinicId: req.user.clinicId },
+          OR: [
+            { branchId: req.user.branchId },
+            { branchId: null, patient: { branchId: req.user.branchId } }
+          ],
           ...(patientId ? { patientId } : {}),
           status: "draft",
         },
@@ -522,6 +536,10 @@ export const getInvoiceReport = async (req, res) => {
       prisma.invoice.count({
         where: {
           patient: { clinicId: req.user.clinicId },
+          OR: [
+            { branchId: req.user.branchId },
+            { branchId: null, patient: { branchId: req.user.branchId } }
+          ],
           ...(patientId ? { patientId } : {}),
           status: { in: ["issued", "overdue"] },
           balance: { gt: 0 },
@@ -535,6 +553,10 @@ export const getInvoiceReport = async (req, res) => {
         by: ["patientId"],
         where: {
           patient: { clinicId: req.user.clinicId },
+          OR: [
+            { branchId: req.user.branchId },
+            { branchId: null, patient: { branchId: req.user.branchId } }
+          ],
           ...(patientId ? { patientId } : {}),
           status: { not: "cancelled" },
           balance: { gt: 0 },
@@ -569,6 +591,7 @@ export const getInvoicePatients = async (req, res) => {
     const patients = await prisma.patient.findMany({
       where: {
         clinicId: req.user.clinicId,
+        branchId: req.user.branchId,
         isDeleted: false,
         invoices: {
           some: {},

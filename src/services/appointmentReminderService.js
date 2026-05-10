@@ -8,10 +8,7 @@ import {
 const RESEND_API_URL = "https://api.resend.com/emails";
 const TWILIO_API_BASE_URL = "https://api.twilio.com/2010-04-01";
 const REMINDER_POLL_INTERVAL_MS = 5 * 60 * 1000;
-const REMINDER_LEAD_24H_MS = 24 * 60 * 60 * 1000;
-const REMINDER_LEAD_2H_MS = 2 * 60 * 60 * 1000;
-const DEFAULT_REMINDER_TIMEZONE =
-  process.env.DEFAULT_CLINIC_TIMEZONE?.trim() || "Africa/Lagos";
+
 let transporterPromise = null;
 let reminderIntervalId = null;
 let reminderJobRunning = false;
@@ -151,208 +148,6 @@ const getAppointmentStartDateTime = (appointmentDate, timeSlot) => {
 const isLikelyE164PhoneNumber = (value) =>
   /^\+[1-9]\d{7,14}$/.test(String(value || "").trim());
 
-const isValidTimeZone = (value) => {
-  try {
-    Intl.DateTimeFormat(undefined, { timeZone: value }).format(new Date());
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-const normalizeHour = (value, fallback) => {
-  const parsed = Number.parseInt(String(value ?? ""), 10);
-  if (!Number.isFinite(parsed)) {
-    return fallback;
-  }
-
-  return Math.max(0, Math.min(23, parsed));
-};
-
-const getClinicReminderPolicy = (clinic) => {
-  const reminderTimezone = isValidTimeZone(clinic?.reminderTimezone)
-    ? clinic.reminderTimezone
-    : DEFAULT_REMINDER_TIMEZONE;
-  const reminderWindowStartHour = normalizeHour(
-    clinic?.reminderWindowStartHour,
-    8,
-  );
-  const reminderWindowEndHour = normalizeHour(
-    clinic?.reminderWindowEndHour,
-    18,
-  );
-
-  return {
-    reminderTimezone,
-    reminderWindowStartHour:
-      reminderWindowStartHour < reminderWindowEndHour
-        ? reminderWindowStartHour
-        : 8,
-    reminderWindowEndHour:
-      reminderWindowStartHour < reminderWindowEndHour
-        ? reminderWindowEndHour
-        : 18,
-  };
-};
-
-const zonedDateTimeFormatterCache = new Map();
-
-const getZonedDateTimeFormatter = (timeZone) => {
-  const cacheKey = String(timeZone || DEFAULT_REMINDER_TIMEZONE);
-
-  if (!zonedDateTimeFormatterCache.has(cacheKey)) {
-    zonedDateTimeFormatterCache.set(
-      cacheKey,
-      new Intl.DateTimeFormat("en-CA", {
-        timeZone: cacheKey,
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: false,
-      }),
-    );
-  }
-
-  return zonedDateTimeFormatterCache.get(cacheKey);
-};
-
-const getZonedParts = (date, timeZone) => {
-  const formatter = getZonedDateTimeFormatter(timeZone);
-  const parts = formatter.formatToParts(date);
-  const values = {};
-
-  parts.forEach((part) => {
-    if (part.type !== "literal") {
-      values[part.type] = part.value;
-    }
-  });
-
-  return {
-    year: Number(values.year),
-    month: Number(values.month),
-    day: Number(values.day),
-    hour: Number(values.hour),
-    minute: Number(values.minute),
-    second: Number(values.second),
-  };
-};
-
-const getTimeZoneOffsetMs = (date, timeZone) => {
-  const parts = getZonedParts(date, timeZone);
-  const asUtc = Date.UTC(
-    parts.year,
-    parts.month - 1,
-    parts.day,
-    parts.hour,
-    parts.minute,
-    parts.second,
-  );
-
-  return asUtc - date.getTime();
-};
-
-const getUtcDateForZonedDateTime = (
-  { year, month, day, hour = 0, minute = 0, second = 0 },
-  timeZone,
-) => {
-  let candidate = new Date(
-    Date.UTC(year, month - 1, day, hour, minute, second, 0),
-  );
-
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const offset = getTimeZoneOffsetMs(candidate, timeZone);
-    const nextCandidate = new Date(
-      Date.UTC(year, month - 1, day, hour, minute, second, 0) - offset,
-    );
-
-    if (Math.abs(nextCandidate.getTime() - candidate.getTime()) < 1000) {
-      return nextCandidate;
-    }
-
-    candidate = nextCandidate;
-  }
-
-  return candidate;
-};
-
-const addDaysToZonedDate = ({ year, month, day }, days) => {
-  const next = new Date(Date.UTC(year, month - 1, day + days, 0, 0, 0, 0));
-
-  return {
-    year: next.getUTCFullYear(),
-    month: next.getUTCMonth() + 1,
-    day: next.getUTCDate(),
-  };
-};
-
-const getWindowBoundsForZonedDate = (dateParts, policy) => ({
-  windowStart: getUtcDateForZonedDateTime(
-    {
-      year: dateParts.year,
-      month: dateParts.month,
-      day: dateParts.day,
-      hour: policy.reminderWindowStartHour,
-      minute: 0,
-      second: 0,
-    },
-    policy.reminderTimezone,
-  ),
-  windowEnd: getUtcDateForZonedDateTime(
-    {
-      year: dateParts.year,
-      month: dateParts.month,
-      day: dateParts.day,
-      hour: policy.reminderWindowEndHour,
-      minute: 0,
-      second: 0,
-    },
-    policy.reminderTimezone,
-  ),
-});
-
-const getScheduledReminderTime = (
-  nominalTriggerAt,
-  appointmentStart,
-  policy,
-) => {
-  let probe = new Date(nominalTriggerAt);
-
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const probeParts = getZonedParts(probe, policy.reminderTimezone);
-    const { windowStart, windowEnd } = getWindowBoundsForZonedDate(
-      probeParts,
-      policy,
-    );
-
-    let scheduledAt = nominalTriggerAt;
-
-    if (scheduledAt < windowStart) {
-      scheduledAt = windowStart;
-    } else if (scheduledAt >= windowEnd) {
-      const nextDay = addDaysToZonedDate(probeParts, 1);
-      probe = getUtcDateForZonedDateTime(
-        {
-          year: nextDay.year,
-          month: nextDay.month,
-          day: nextDay.day,
-          hour: policy.reminderWindowStartHour,
-          minute: 0,
-          second: 0,
-        },
-        policy.reminderTimezone,
-      );
-      continue;
-    }
-
-    return scheduledAt < appointmentStart ? scheduledAt : null;
-  }
-
-  return null;
-};
-
 const buildReminderLinks = (responseToken) => {
   const baseUrl = getBaseUrl().replace(/\/$/, "");
   const encodedToken = encodeURIComponent(responseToken);
@@ -361,6 +156,12 @@ const buildReminderLinks = (responseToken) => {
     confirmUrl: `${baseUrl}/appointment-response?token=${encodedToken}&action=confirm`,
     rescheduleUrl: `${baseUrl}/appointment-response?token=${encodedToken}&action=reschedule`,
   };
+};
+
+const getTimeText = (minutes) => {
+  if (minutes < 60) return `in ${minutes} minutes`;
+  if (minutes < 1440) return `in ${Math.round(minutes / 60)} hours`;
+  return `in ${Math.round(minutes / 1440)} days`;
 };
 
 const buildReminderEmailCopy = ({
@@ -377,14 +178,11 @@ const buildReminderEmailCopy = ({
     month: "long",
     day: "numeric",
   });
-  const title =
-    type === "2h"
-      ? "Appointment Reminder: Today"
-      : "Appointment Reminder: Coming Up";
-  const intro =
-    type === "2h"
-      ? "This is a quick reminder that you have an appointment soon."
-      : "This is a friendly reminder about your upcoming appointment.";
+  
+  const timeText = getTimeText(Number(type));
+  const title = `Appointment Reminder: Coming up ${timeText}`;
+  const intro = `This is a friendly reminder that you have an appointment coming up ${timeText}.`;
+  
   const { confirmUrl, rescheduleUrl } = buildReminderLinks(responseToken);
 
   return {
@@ -448,10 +246,10 @@ const buildReminderSmsCopy = ({
     month: "short",
     day: "numeric",
   });
-  const intro =
-    type === "2h"
-      ? "Appointment reminder: your visit is coming up soon."
-      : "Appointment reminder: your visit is coming up tomorrow.";
+  
+  const timeText = getTimeText(Number(type));
+  const intro = `Appointment reminder: your visit is coming up ${timeText}.`;
+  
   const { confirmUrl, rescheduleUrl } = buildReminderLinks(responseToken);
 
   return [
@@ -611,15 +409,21 @@ const markReminderDisabled = async (
 };
 
 const markReminderSent = async (appointmentId, type, reminderLastError = "") => {
+  const appointment = await prisma.appointment.findUnique({
+    where: { id: appointmentId },
+    select: { remindersSent: true }
+  });
+  
+  const sent = Array.isArray(appointment?.remindersSent) ? appointment.remindersSent : [];
+  sent.push(Number(type));
+
   await prisma.appointment.update({
     where: { id: appointmentId },
     data: {
-      reminderStatus: type === "2h" ? "sent_final" : "sent_24h",
+      reminderStatus: "sent",
+      remindersSent: sent,
       reminderLastSentAt: new Date(),
       reminderLastError: String(reminderLastError || "").slice(0, 500),
-      ...(type === "2h"
-        ? { reminder2hSentAt: new Date() }
-        : { reminder24hSentAt: new Date() }),
     },
   });
 };
@@ -633,8 +437,9 @@ export const processAppointmentReminders = async () => {
 
   try {
     const now = new Date();
-    const nextDay = new Date(now.getTime() + 26 * 60 * 60 * 1000);
-
+    // Look ahead generously. We no longer use 26 hours strictly, as they might have a 48h offset.
+    // However, fetching all future appointments is fine if the DB is indexed.
+    // To be safe, let's fetch any scheduled appointments with reminderEnabled=true.
     const appointments = await prisma.appointment.findMany({
       where: {
         status: "scheduled",
@@ -642,8 +447,7 @@ export const processAppointmentReminders = async () => {
           {
             reminderEnabled: true,
             appointmentDate: {
-              gte: new Date(now.getTime() - 24 * 60 * 60 * 1000),
-              lte: nextDay,
+              gte: new Date(now.getTime() - 24 * 60 * 60 * 1000), // from past 24h just in case of delays
             },
           },
           {
@@ -673,9 +477,7 @@ export const processAppointmentReminders = async () => {
                 plan: true,
                 subscriptionEnds: true,
                 paystackSubscriptionStatus: true,
-                reminderTimezone: true,
-                reminderWindowStartHour: true,
-                reminderWindowEndHour: true,
+                reminderOffsets: true,
               },
             },
           },
@@ -752,36 +554,24 @@ export const processAppointmentReminders = async () => {
       }
 
       const timeUntilAppointmentMs = appointmentStart.getTime() - now.getTime();
-      const createdAtMs = new Date(appointment.createdAt).getTime();
-      const hadReal24HourLeadTime =
-        Number.isFinite(createdAtMs) &&
-        createdAtMs <= appointmentStart.getTime() - REMINDER_LEAD_24H_MS;
-      const policy = getClinicReminderPolicy(clinic);
-      const scheduled24hAt = hadReal24HourLeadTime
-        ? getScheduledReminderTime(
-            new Date(appointmentStart.getTime() - REMINDER_LEAD_24H_MS),
-            appointmentStart,
-            policy,
-          )
-        : null;
-      const scheduled2hAt = getScheduledReminderTime(
-        new Date(appointmentStart.getTime() - REMINDER_LEAD_2H_MS),
-        appointmentStart,
-        policy,
-      );
-      const shouldSend24h =
-        !appointment.reminder24hSentAt &&
-        scheduled24hAt &&
-        now >= scheduled24hAt &&
-        timeUntilAppointmentMs > 0;
-      const shouldSend2h =
-        !appointment.reminder2hSentAt &&
-        scheduled2hAt &&
-        now >= scheduled2hAt &&
-        timeUntilAppointmentMs > 0;
+      
+      const clinicOffsets = Array.isArray(clinic?.reminderOffsets) ? clinic.reminderOffsets : [1440, 120];
+      const remindersSent = Array.isArray(appointment.remindersSent) ? appointment.remindersSent : [];
+      
+      // Find the first matching offset that hasn't been sent and is due
+      let targetOffset = null;
+      for (const offset of clinicOffsets) {
+        if (
+          !remindersSent.includes(offset) && 
+          timeUntilAppointmentMs <= offset * 60 * 1000 + REMINDER_POLL_INTERVAL_MS && 
+          timeUntilAppointmentMs > 0
+        ) {
+           targetOffset = offset;
+           break; // Process one reminder at a time
+        }
+      }
 
-      const reminderType = shouldSend2h ? "2h" : shouldSend24h ? "24h" : null;
-      if (!reminderType) {
+      if (!targetOffset) {
         continue;
       }
 
@@ -798,7 +588,7 @@ export const processAppointmentReminders = async () => {
                 clinicName: clinic?.name,
                 appointmentDate: appointmentStart,
                 timeSlot: appointment.timeSlot,
-                type: reminderType,
+                type: targetOffset,
                 responseToken: appointment.patientResponseToken,
               }),
             },
@@ -815,7 +605,7 @@ export const processAppointmentReminders = async () => {
                 clinicName: clinic?.name,
                 appointmentDate: appointmentStart,
                 timeSlot: appointment.timeSlot,
-                type: reminderType,
+                type: targetOffset,
                 responseToken: appointment.patientResponseToken,
               }),
             },
@@ -844,7 +634,7 @@ export const processAppointmentReminders = async () => {
 
         await markReminderSent(
           appointment.id,
-          reminderType,
+          targetOffset,
           partialFailureMessage,
         );
       } catch (error) {

@@ -22,6 +22,7 @@ import {
 import {
   hasActivePaidSubscription,
   hasActiveProAccess,
+  hasEnterpriseAccess,
   isSubscriptionExpired,
   isTrialingClinic,
   getUpgradeRequiredMessage,
@@ -29,9 +30,19 @@ import {
   getStaffSubscriptionExpiredMessage,
 } from "../utils/subscriptionAccess.js";
 import crypto from "crypto";
+import {
+  getAllActiveClinicBranches,
+  getAllowedActiveBranches,
+  normalizeAssignedBranchIds,
+  resolveActiveBranch,
+  serializeBranch,
+  STAFF_BRANCH_ACCESS_MESSAGE,
+} from "../utils/branchAccess.js";
 
 const router = express.Router();
-const STAFF_ROLES = ["admin", "doctor", "nurse"];
+const STAFF_ROLES = ["admin", "branch_manager", "doctor", "nurse"];
+const STAFF_MANAGER_ROLES = ["admin", "branch_manager"];
+const BRANCH_MANAGER_MANAGEABLE_ROLES = ["doctor", "nurse"];
 const DEFAULT_PROCEDURE_PRESETS = [
   { description: "Consultation", category: "service", unitPrice: 5000 },
   { description: "Scaling and Polishing", category: "procedure", unitPrice: 15000 },
@@ -73,26 +84,39 @@ const normalizeProcedurePresetPrices = (value) => {
   });
 };
 
-const DEFAULT_REMINDER_TIMEZONE =
-  process.env.DEFAULT_CLINIC_TIMEZONE?.trim() || "Africa/Lagos";
+const slugifyBranchPart = (value) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 
-const isValidTimeZone = (value) => {
-  try {
-    Intl.DateTimeFormat(undefined, { timeZone: value }).format(new Date());
-    return true;
-  } catch {
-    return false;
-  }
+const buildBranchSlug = ({ name, city, area }) =>
+  [city, area, name].map(slugifyBranchPart).filter(Boolean).join("-");
+
+const resolveSerializedBranchScope = async ({
+  clinicId,
+  role,
+  assignedBranchIds = [],
+  requestedBranchId = "",
+}) => {
+  const branches = await getAllowedActiveBranches({
+    clinicId,
+    role,
+    assignedBranchIds,
+  });
+
+  const serializedBranches = branches.map(serializeBranch);
+  const { activeBranch } = resolveActiveBranch(serializedBranches, requestedBranchId);
+
+  return {
+    branchId: activeBranch?.id || null,
+    branch: activeBranch,
+    availableBranches: serializedBranches,
+  };
 };
 
-const normalizeReminderHour = (value, fallback) => {
-  const parsed = Number.parseInt(String(value ?? ""), 10);
-  if (!Number.isFinite(parsed)) {
-    return fallback;
-  }
 
-  return Math.min(23, Math.max(0, parsed));
-};
 
 const serializeClinic = (clinic) =>
   clinic
@@ -112,16 +136,7 @@ const serializeClinic = (clinic) =>
         brandColor: clinic.brandColor || null,
         intakeEnabled: Boolean(clinic.intakeEnabled),
         intakePublicToken: clinic.intakePublicToken || null,
-        reminderTimezone:
-          clinic.reminderTimezone || DEFAULT_REMINDER_TIMEZONE,
-        reminderWindowStartHour: normalizeReminderHour(
-          clinic.reminderWindowStartHour,
-          8,
-        ),
-        reminderWindowEndHour: normalizeReminderHour(
-          clinic.reminderWindowEndHour,
-          18,
-        ),
+        reminderOffsets: Array.isArray(clinic.reminderOffsets) ? clinic.reminderOffsets : [1440, 120],
         subscriptionEnds: clinic.subscriptionEnds || null,
         paystackCustomerCode: clinic.paystackCustomerCode || null,
         paystackPlanCode: clinic.paystackPlanCode || null,
@@ -130,7 +145,9 @@ const serializeClinic = (clinic) =>
         paystackLastReference: clinic.paystackLastReference || null,
         hasActivePaidSubscription: hasActivePaidSubscription(clinic),
         hasActiveProAccess: hasActiveProAccess(clinic),
+        hasEnterpriseAccess: hasEnterpriseAccess(clinic),
         isTrialing: isTrialingClinic(clinic),
+        branchCount: Array.isArray(clinic.branches) ? clinic.branches.length : clinic._count?.branches || 0,
         createdAt: clinic.createdAt,
       }
     : null;
@@ -141,6 +158,10 @@ const serializeUser = (user) => ({
   email: user.email,
   role: user.role,
   clinicId: user.clinicId,
+  assignedBranchIds: normalizeAssignedBranchIds(user.assignedBranchIds),
+  branchId: user.branchId || null,
+  branch: user.branch || null,
+  branches: Array.isArray(user.availableBranches) ? user.availableBranches : [],
   clinic: serializeClinic(user.clinic),
   isActive: Boolean(user.isActive),
   emailVerified: Boolean(user.emailVerified),
@@ -158,6 +179,93 @@ const getUserByEmail = (email) =>
     where: { email },
     include: { clinic: true },
   });
+
+const resolveValidAssignedBranchIds = async ({
+  clinicId,
+  role,
+  assignedBranchIds,
+}) => {
+  if (role === "admin") {
+    return {
+      error: null,
+      branchIds: [],
+    };
+  }
+
+  const normalizedAssignedBranchIds = normalizeAssignedBranchIds(assignedBranchIds);
+
+  if (normalizedAssignedBranchIds.length === 0) {
+    return {
+      error: {
+        status: 400,
+        message: "Assign at least one branch to each non-admin staff account.",
+      },
+      branchIds: [],
+    };
+  }
+
+  const activeBranches = await getAllActiveClinicBranches(clinicId);
+  const activeBranchIds = new Set(activeBranches.map((branch) => branch.id));
+  const invalidBranchId = normalizedAssignedBranchIds.find(
+    (branchId) => !activeBranchIds.has(branchId),
+  );
+
+  if (invalidBranchId) {
+    return {
+      error: {
+        status: 400,
+        message: "Assigned branches must belong to this clinic and remain active.",
+      },
+      branchIds: [],
+    };
+  }
+
+  return {
+    error: null,
+    branchIds: normalizedAssignedBranchIds,
+  };
+};
+
+const canBranchManagerAssignRole = (role) =>
+  BRANCH_MANAGER_MANAGEABLE_ROLES.includes(role);
+
+const doAssignedBranchesFitWithinActorScope = (actorAssignedBranchIds, targetAssignedBranchIds) => {
+  const actorBranchSet = new Set(normalizeAssignedBranchIds(actorAssignedBranchIds));
+  const targetBranchIds = normalizeAssignedBranchIds(targetAssignedBranchIds);
+
+  return targetBranchIds.length > 0 && targetBranchIds.every((branchId) => actorBranchSet.has(branchId));
+};
+
+const canActorManageUser = (actor, targetUser) => {
+  if (actor.role === "admin") {
+    return true;
+  }
+
+  if (actor.role !== "branch_manager") {
+    return false;
+  }
+
+  if (!canBranchManagerAssignRole(targetUser.role)) {
+    return false;
+  }
+
+  return doAssignedBranchesFitWithinActorScope(
+    actor.assignedBranchIds,
+    targetUser.assignedBranchIds,
+  );
+};
+
+const filterManageableStaffForActor = (actor, staff) => {
+  if (actor.role === "admin") {
+    return staff;
+  }
+
+  if (actor.role !== "branch_manager") {
+    return [];
+  }
+
+  return staff.filter((member) => canActorManageUser(actor, member));
+};
 
 const refreshVerificationForUser = async (user) => {
   const verification = createEmailVerification();
@@ -183,6 +291,22 @@ const refreshVerificationForUser = async (user) => {
 const createIntakePublicToken = () =>
   crypto.randomBytes(24).toString("hex");
 
+const getCurrentActiveBranch = async (req) => {
+  const branchId = String(req.user?.branchId || "").trim();
+
+  if (!branchId) {
+    return null;
+  }
+
+  return prisma.branch.findFirst({
+    where: {
+      id: branchId,
+      clinicId: req.user.clinicId,
+      isActive: true,
+    },
+  });
+};
+
 const ensureAnotherActiveAdminExists = async (userId, clinicId) => {
   const targetUser = await getUserById(userId);
 
@@ -207,15 +331,31 @@ const ensureAnotherActiveAdminExists = async (userId, clinicId) => {
 
 router.get("/clinic-profile", protect, async (req, res) => {
   try {
-    const clinic = await prisma.clinic.findUnique({
-      where: { id: req.user.clinicId },
-    });
+    const [clinic, currentBranch] = await Promise.all([
+      prisma.clinic.findUnique({
+        where: { id: req.user.clinicId },
+        include: {
+          _count: {
+            select: { branches: true },
+          },
+        },
+      }),
+      getCurrentActiveBranch(req),
+    ]);
 
     if (!clinic) {
       return res.status(404).json({ message: "Clinic profile not found" });
     }
 
-    res.json({ clinic: serializeClinic(clinic) });
+    res.json({
+      clinic: {
+        ...serializeClinic(clinic),
+        intakeEnabled: Boolean(currentBranch?.intakeEnabled),
+        intakePublicToken: currentBranch?.intakePublicToken || null,
+      },
+      activeBranch: currentBranch ? serializeBranch(currentBranch) : req.user.branch || null,
+      branches: Array.isArray(req.user.availableBranches) ? req.user.availableBranches : [],
+    });
   } catch (error) {
     console.error("Get clinic profile error:", error);
     res.status(500).json({ message: "Failed to fetch clinic profile" });
@@ -233,16 +373,9 @@ router.put("/clinic-profile", protect, authorizeRoles("admin"), validateClinicPr
     const contactPerson = req.body?.contactPerson?.trim() || "";
     const logoUrl = req.body?.logoUrl?.trim() || null;
     const brandColor = req.body?.brandColor?.trim() || null;
-    const reminderTimezone =
-      req.body?.reminderTimezone?.trim() || DEFAULT_REMINDER_TIMEZONE;
-    const reminderWindowStartHour = normalizeReminderHour(
-      req.body?.reminderWindowStartHour,
-      8,
-    );
-    const reminderWindowEndHour = normalizeReminderHour(
-      req.body?.reminderWindowEndHour,
-      18,
-    );
+    const reminderOffsets = Array.isArray(req.body?.reminderOffsets) 
+      ? Array.from(new Set(req.body.reminderOffsets.map(Number).filter(n => Number.isFinite(n) && n > 0))).sort((a, b) => b - a)
+      : [1440, 120];
     const procedurePresetPrices = normalizeProcedurePresetPrices(
       req.body?.procedurePresetPrices,
     );
@@ -253,19 +386,7 @@ router.put("/clinic-profile", protect, authorizeRoles("admin"), validateClinicPr
       });
     }
 
-    if (!isValidTimeZone(reminderTimezone)) {
-      return res.status(400).json({
-        message: "Reminder timezone is invalid. Use a valid IANA timezone like Africa/Lagos.",
-      });
-    }
-
-    if (reminderWindowStartHour >= reminderWindowEndHour) {
-      return res.status(400).json({
-        message: "Reminder sending start hour must be earlier than the end hour.",
-      });
-    }
-
-    const existingClinic = await prisma.clinic.findFirst({
+    const duplicateClinic = await prisma.clinic.findFirst({
       where: {
         email: clinicEmail,
         id: { not: req.user.clinicId },
@@ -273,7 +394,7 @@ router.put("/clinic-profile", protect, authorizeRoles("admin"), validateClinicPr
       select: { id: true },
     });
 
-    if (existingClinic) {
+    if (duplicateClinic) {
       return res.status(400).json({
         message: "Another clinic is already using this email address",
       });
@@ -291,9 +412,7 @@ router.put("/clinic-profile", protect, authorizeRoles("admin"), validateClinicPr
         contactPerson,
         logoUrl,
         brandColor,
-        reminderTimezone,
-        reminderWindowStartHour,
-        reminderWindowEndHour,
+        reminderOffsets,
         procedurePresetPrices,
       },
     });
@@ -308,7 +427,7 @@ router.put("/clinic-profile", protect, authorizeRoles("admin"), validateClinicPr
   }
 });
 
-router.put("/clinic-profile/intake-link", protect, authorizeRoles("admin"), async (req, res) => {
+router.put("/clinic-profile/intake-link", protect, authorizeRoles("admin", "branch_manager", "doctor", "nurse"), async (req, res) => {
   try {
     const requestedEnabled = req.body?.intakeEnabled;
 
@@ -324,13 +443,26 @@ router.put("/clinic-profile/intake-link", protect, authorizeRoles("admin"), asyn
       return res.status(404).json({ message: "Clinic profile not found" });
     }
 
-    const intakePublicToken =
-      requestedEnabled && !existingClinic.intakePublicToken
-        ? createIntakePublicToken()
-        : existingClinic.intakePublicToken;
+    if (!hasActiveProAccess(existingClinic)) {
+      return res.status(403).json({
+        message: getUpgradeRequiredMessage(),
+        errorCode: "UPGRADE_REQUIRED",
+      });
+    }
 
-    const clinic = await prisma.clinic.update({
-      where: { id: req.user.clinicId },
+    const currentBranch = await getCurrentActiveBranch(req);
+
+    if (!currentBranch) {
+      return res.status(404).json({ message: "No active branch is available for this staff account." });
+    }
+
+    const intakePublicToken =
+      requestedEnabled && !currentBranch.intakePublicToken
+        ? createIntakePublicToken()
+        : currentBranch.intakePublicToken;
+
+    const branch = await prisma.branch.update({
+      where: { id: currentBranch.id },
       data: {
         intakeEnabled: requestedEnabled,
         intakePublicToken,
@@ -339,9 +471,13 @@ router.put("/clinic-profile/intake-link", protect, authorizeRoles("admin"), asyn
 
     res.json({
       message: requestedEnabled
-        ? "Patient intake link enabled successfully"
-        : "Patient intake link disabled successfully",
-      clinic: serializeClinic(clinic),
+        ? "Patient intake link enabled successfully for this branch"
+        : "Patient intake link disabled successfully for this branch",
+      clinic: {
+        intakeEnabled: branch.intakeEnabled,
+        intakePublicToken: branch.intakePublicToken,
+      },
+      branch: serializeBranch(branch),
     });
   } catch (error) {
     console.error("Update intake link settings error:", error);
@@ -349,7 +485,7 @@ router.put("/clinic-profile/intake-link", protect, authorizeRoles("admin"), asyn
   }
 });
 
-router.post("/clinic-profile/intake-link/regenerate", protect, authorizeRoles("admin"), async (req, res) => {
+router.post("/clinic-profile/intake-link/regenerate", protect, authorizeRoles("admin", "branch_manager"), async (req, res) => {
   try {
     const existingClinic = await prisma.clinic.findUnique({
       where: { id: req.user.clinicId },
@@ -359,8 +495,21 @@ router.post("/clinic-profile/intake-link/regenerate", protect, authorizeRoles("a
       return res.status(404).json({ message: "Clinic profile not found" });
     }
 
-    const clinic = await prisma.clinic.update({
-      where: { id: req.user.clinicId },
+    if (!hasActiveProAccess(existingClinic)) {
+      return res.status(403).json({
+        message: getUpgradeRequiredMessage(),
+        errorCode: "UPGRADE_REQUIRED",
+      });
+    }
+
+    const currentBranch = await getCurrentActiveBranch(req);
+
+    if (!currentBranch) {
+      return res.status(404).json({ message: "No active branch is available for this staff account." });
+    }
+
+    const branch = await prisma.branch.update({
+      where: { id: currentBranch.id },
       data: {
         intakeEnabled: true,
         intakePublicToken: createIntakePublicToken(),
@@ -368,8 +517,12 @@ router.post("/clinic-profile/intake-link/regenerate", protect, authorizeRoles("a
     });
 
     res.json({
-      message: "Patient intake link regenerated successfully",
-      clinic: serializeClinic(clinic),
+      message: "Patient intake link regenerated successfully for this branch",
+      clinic: {
+        intakeEnabled: branch.intakeEnabled,
+        intakePublicToken: branch.intakePublicToken,
+      },
+      branch: serializeBranch(branch),
     });
   } catch (error) {
     console.error("Regenerate intake link error:", error);
@@ -555,6 +708,28 @@ router.post("/register-clinic", authLimiter, validateClinicRegistration, async (
           plan: "PRO",
           subscriptionEnds: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
         },
+        include: {
+          branches: true,
+        },
+      });
+
+      await tx.branch.create({
+        data: {
+          clinicId: createdClinic.id,
+          name: clinicName.trim(),
+          slug:
+            buildBranchSlug({
+              name: clinicName.trim(),
+              city: clinicCity?.trim() || "",
+              area: "",
+            }) || `branch-${Date.now()}`,
+          country: clinicCountry?.trim() || "",
+          city: clinicCity?.trim() || "",
+          area: "",
+          address: clinicAddress?.trim() || "",
+          phone: clinicPhone?.trim() || "",
+          isPrimary: true,
+        },
       });
 
       const createdAdmin = await tx.user.create({
@@ -600,9 +775,10 @@ router.post("/register-clinic", authLimiter, validateClinicRegistration, async (
   }
 });
 
-router.post("/signup", protect, authorizeRoles("admin"), validateSignup, async (req, res) => {
+router.post("/signup", protect, authorizeRoles(...STAFF_MANAGER_ROLES), validateSignup, async (req, res) => {
   try {
-    const { name, email, password, role } = req.body;
+    const { name, email, password, role, assignedBranchIds } = req.body;
+    const requestedRole = role || "nurse";
 
     if (!name?.trim() || !email?.trim() || !password) {
       return res
@@ -610,8 +786,17 @@ router.post("/signup", protect, authorizeRoles("admin"), validateSignup, async (
         .json({ message: "Name, email and password are required" });
     }
 
-    if (!STAFF_ROLES.includes(role || "nurse")) {
+    if (!STAFF_ROLES.includes(requestedRole) || requestedRole === "admin") {
       return res.status(400).json({ message: "Invalid staff role" });
+    }
+
+    if (
+      req.user.role === "branch_manager" &&
+      !canBranchManagerAssignRole(requestedRole)
+    ) {
+      return res.status(403).json({
+        message: "Branch managers can only create doctor or nurse accounts.",
+      });
     }
 
     const normalizedEmail = email.toLowerCase().trim();
@@ -636,6 +821,30 @@ router.post("/signup", protect, authorizeRoles("admin"), validateSignup, async (
       });
     }
 
+    const branchAssignment = await resolveValidAssignedBranchIds({
+      clinicId: req.user.clinicId,
+      role: requestedRole,
+      assignedBranchIds,
+    });
+
+    if (branchAssignment.error) {
+      return res.status(branchAssignment.error.status).json({
+        message: branchAssignment.error.message,
+      });
+    }
+
+    if (
+      req.user.role === "branch_manager" &&
+      !doAssignedBranchesFitWithinActorScope(
+        req.user.assignedBranchIds,
+        branchAssignment.branchIds,
+      )
+    ) {
+      return res.status(403).json({
+        message: "You can only assign staff to branches you manage.",
+      });
+    }
+
     const hashedPassword = await bcrypt.hash(password.trim(), 10);
     const verification = createEmailVerification();
     const newUser = await prisma.user.create({
@@ -643,8 +852,9 @@ router.post("/signup", protect, authorizeRoles("admin"), validateSignup, async (
         name: name.trim(),
         email: normalizedEmail,
         password: hashedPassword,
-        role: role || "nurse",
+        role: requestedRole,
         clinicId: req.user.clinicId,
+        assignedBranchIds: branchAssignment.branchIds,
         emailVerified: false,
         emailVerificationToken: verification.token,
         emailVerificationExpiresAt: verification.expiresAt,
@@ -679,7 +889,7 @@ router.post("/signup", protect, authorizeRoles("admin"), validateSignup, async (
   }
 });
 
-router.get("/staff", protect, authorizeRoles("admin"), async (req, res) => {
+router.get("/staff", protect, authorizeRoles(...STAFF_MANAGER_ROLES), async (req, res) => {
   try {
     if (isSubscriptionExpired(req.user.clinic)) {
       return res.status(403).json({
@@ -694,14 +904,83 @@ router.get("/staff", protect, authorizeRoles("admin"), async (req, res) => {
       orderBy: [{ createdAt: "desc" }, { name: "asc" }],
     });
 
-    res.json(staff.map(serializeUser));
+    res.json(filterManageableStaffForActor(req.user, staff).map(serializeUser));
   } catch (error) {
     console.error("Get staff error:", error);
     res.status(500).json({ message: "Failed to fetch staff accounts" });
   }
 });
 
-router.patch("/staff/:id/status", protect, authorizeRoles("admin"), async (req, res) => {
+router.patch("/staff/:id/branches", protect, authorizeRoles(...STAFF_MANAGER_ROLES), async (req, res) => {
+  try {
+    if (isSubscriptionExpired(req.user.clinic)) {
+      return res.status(403).json({
+        message: getAdminSubscriptionExpiredMessage(),
+        errorCode: "SUBSCRIPTION_EXPIRED",
+      });
+    }
+
+    const existingUser = await getUserById(req.params.id);
+
+    if (!existingUser || existingUser.clinicId !== req.user.clinicId) {
+      return res.status(404).json({ message: "Staff account not found" });
+    }
+
+    if (existingUser.role === "admin") {
+      return res.status(400).json({
+        message: "Admin accounts always have access to all clinic branches.",
+      });
+    }
+
+    if (!canActorManageUser(req.user, existingUser)) {
+      return res.status(403).json({
+        message: "You can only update staff in branches you manage.",
+      });
+    }
+
+    const branchAssignment = await resolveValidAssignedBranchIds({
+      clinicId: req.user.clinicId,
+      role: existingUser.role,
+      assignedBranchIds: req.body?.assignedBranchIds,
+    });
+
+    if (branchAssignment.error) {
+      return res.status(branchAssignment.error.status).json({
+        message: branchAssignment.error.message,
+      });
+    }
+
+    if (
+      req.user.role === "branch_manager" &&
+      !doAssignedBranchesFitWithinActorScope(
+        req.user.assignedBranchIds,
+        branchAssignment.branchIds,
+      )
+    ) {
+      return res.status(403).json({
+        message: "You can only assign staff to branches you manage.",
+      });
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id: existingUser.id },
+      data: {
+        assignedBranchIds: branchAssignment.branchIds,
+      },
+      include: { clinic: true },
+    });
+
+    res.json({
+      message: "Staff branch assignments updated successfully.",
+      user: serializeUser(updatedUser),
+    });
+  } catch (error) {
+    console.error("Update staff branches error:", error);
+    res.status(500).json({ message: "Failed to update staff branch assignments" });
+  }
+});
+
+router.patch("/staff/:id/status", protect, authorizeRoles(...STAFF_MANAGER_ROLES), async (req, res) => {
   try {
     if (isSubscriptionExpired(req.user.clinic)) {
       return res.status(403).json({
@@ -715,6 +994,12 @@ router.patch("/staff/:id/status", protect, authorizeRoles("admin"), async (req, 
 
     if (!existingUser || existingUser.clinicId !== req.user.clinicId) {
       return res.status(404).json({ message: "Staff account not found" });
+    }
+
+    if (!canActorManageUser(req.user, existingUser)) {
+      return res.status(403).json({
+        message: "You can only update staff in branches you manage.",
+      });
     }
 
     if (existingUser.id === req.user.id && !isActive) {
@@ -752,7 +1037,7 @@ router.patch("/staff/:id/status", protect, authorizeRoles("admin"), async (req, 
   }
 });
 
-router.delete("/staff/:id", protect, authorizeRoles("admin"), async (req, res) => {
+router.delete("/staff/:id", protect, authorizeRoles(...STAFF_MANAGER_ROLES), async (req, res) => {
   try {
     if (isSubscriptionExpired(req.user.clinic)) {
       return res.status(403).json({
@@ -765,6 +1050,12 @@ router.delete("/staff/:id", protect, authorizeRoles("admin"), async (req, res) =
 
     if (!existingUser || existingUser.clinicId !== req.user.clinicId) {
       return res.status(404).json({ message: "Staff account not found" });
+    }
+
+    if (!canActorManageUser(req.user, existingUser)) {
+      return res.status(403).json({
+        message: "You can only delete staff in branches you manage.",
+      });
     }
 
     if (existingUser.id === req.user.id) {
@@ -859,8 +1150,24 @@ router.post("/login", authLimiter, validateLogin, async (req, res) => {
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
 
+    const branchScope = await resolveSerializedBranchScope({
+      clinicId: user.clinicId,
+      role: user.role,
+      assignedBranchIds: user.assignedBranchIds,
+      requestedBranchId: String(req.headers?.["x-branch-id"] || req.query?.branchId || "").trim(),
+    });
+
+    if (user.role !== "admin" && branchScope.availableBranches.length === 0) {
+      return res.status(403).json({ message: STAFF_BRANCH_ACCESS_MESSAGE });
+    }
+
     res.json({
-      user: serializeUser(user),
+      user: serializeUser({
+        ...user,
+        branchId: branchScope.branchId,
+        branch: branchScope.branch,
+        availableBranches: branchScope.availableBranches,
+      }),
     });
   } catch (error) {
     console.error("Login error:", error);

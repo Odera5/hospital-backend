@@ -2,22 +2,30 @@ import crypto from "crypto";
 import { prisma } from "../lib/prisma.js";
 import {
   hasActivePaidSubscription,
+  hasEnterpriseAccess,
   hasActiveProAccess,
   isTrialingClinic,
 } from "../utils/subscriptionAccess.js";
 
 const PAYSTACK_API_BASE_URL = "https://api.paystack.co";
+const PRO_PLAN_TYPE = "PRO";
+const ENTERPRISE_PLAN_TYPE = "ENTERPRISE";
 const PRO_PLAN_NAME = "PrimuxCare Pro Monthly";
 const PRO_PLAN_DESCRIPTION =
   "PrimuxCare Pro monthly subscription for clinics in Nigeria";
 const MONTHLY_INTERVAL = "monthly";
 const DEFAULT_PRO_AMOUNT_KOBO = 10000000;
+const ENTERPRISE_PLAN_NAME = "PrimuxCare Enterprise Monthly";
+const ENTERPRISE_PLAN_DESCRIPTION =
+  "PrimuxCare Enterprise monthly subscription for multi-branch clinics in Nigeria";
+const DEFAULT_ENTERPRISE_AMOUNT_KOBO = 15000000;
 
 const PRO_PLAN_NAME_ANNUAL = "PrimuxCare Pro Annual";
 const PRO_PLAN_DESCRIPTION_ANNUAL =
   "PrimuxCare Pro annual subscription for clinics in Nigeria";
 const ANNUAL_INTERVAL = "annually";
 const DEFAULT_PRO_AMOUNT_KOBO_ANNUAL = 100000000;
+export const SUPPORTED_PLAN_TYPES = [PRO_PLAN_TYPE, ENTERPRISE_PLAN_TYPE];
 export const SUPPORTED_BILLING_INTERVALS = [
   MONTHLY_INTERVAL,
   ANNUAL_INTERVAL,
@@ -34,6 +42,22 @@ export const parseRequestedBillingInterval = (interval) => {
 
   const error = new Error(
     `Unsupported billing interval. Supported intervals: ${SUPPORTED_BILLING_INTERVALS.join(", ")}.`,
+  );
+  error.statusCode = 400;
+  throw error;
+};
+
+export const parseRequestedPlanType = (planType) => {
+  const normalizedPlanType = String(planType || PRO_PLAN_TYPE)
+    .trim()
+    .toUpperCase();
+
+  if (SUPPORTED_PLAN_TYPES.includes(normalizedPlanType)) {
+    return normalizedPlanType;
+  }
+
+  const error = new Error(
+    `Unsupported plan type. Supported plan types: ${SUPPORTED_PLAN_TYPES.join(", ")}.`,
   );
   error.statusCode = 400;
   throw error;
@@ -59,12 +83,36 @@ const requirePaystackSecretKey = () => {
   return key;
 };
 
-const getPlanConfig = (interval = MONTHLY_INTERVAL) => {
+const getPlanConfig = (planType = PRO_PLAN_TYPE, interval = MONTHLY_INTERVAL) => {
+  const normalizedPlanType = parseRequestedPlanType(planType);
   const normalizedInterval = parseRequestedBillingInterval(interval);
+
+  if (normalizedPlanType === ENTERPRISE_PLAN_TYPE) {
+    if (normalizedInterval !== MONTHLY_INTERVAL) {
+      const error = new Error(
+        "Enterprise billing currently supports monthly subscriptions only.",
+      );
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const configuredAmount = Number(process.env.PAYSTACK_ENTERPRISE_PLAN_AMOUNT_KOBO);
+    return {
+      planType: ENTERPRISE_PLAN_TYPE,
+      name: ENTERPRISE_PLAN_NAME,
+      description: ENTERPRISE_PLAN_DESCRIPTION,
+      amount: Number.isFinite(configuredAmount) && configuredAmount > 0
+        ? Math.round(configuredAmount)
+        : DEFAULT_ENTERPRISE_AMOUNT_KOBO,
+      interval: MONTHLY_INTERVAL,
+      envPlanCode: process.env.PAYSTACK_ENTERPRISE_PLAN_CODE?.trim(),
+    };
+  }
 
   if (normalizedInterval === ANNUAL_INTERVAL) {
     const configuredAmount = Number(process.env.PAYSTACK_PRO_PLAN_AMOUNT_KOBO_ANNUAL);
     return {
+      planType: PRO_PLAN_TYPE,
       name: PRO_PLAN_NAME_ANNUAL,
       description: PRO_PLAN_DESCRIPTION_ANNUAL,
       amount: Number.isFinite(configuredAmount) && configuredAmount > 0
@@ -77,6 +125,7 @@ const getPlanConfig = (interval = MONTHLY_INTERVAL) => {
 
   const configuredAmount = Number(process.env.PAYSTACK_PRO_PLAN_AMOUNT_KOBO);
   return {
+    planType: PRO_PLAN_TYPE,
     name: PRO_PLAN_NAME,
     description: PRO_PLAN_DESCRIPTION,
     amount: Number.isFinite(configuredAmount) && configuredAmount > 0
@@ -208,11 +257,79 @@ export const serializeBillingClinic = (clinic) => ({
   paystackLastReference: clinic.paystackLastReference || null,
   hasActivePaidSubscription: hasActivePaidSubscription(clinic),
   hasActiveProAccess: hasActiveProAccess(clinic),
+  hasEnterpriseAccess: hasEnterpriseAccess(clinic),
   isTrialing: isTrialingClinic(clinic),
 });
 
-export const ensurePaystackPlan = async (clinic, interval = MONTHLY_INTERVAL) => {
-  const config = getPlanConfig(interval);
+const inferPlanTypeFromPlanDetails = (transaction) => {
+  const envEnterprisePlanCode = process.env.PAYSTACK_ENTERPRISE_PLAN_CODE?.trim();
+  const envProPlanCodeMonthly = process.env.PAYSTACK_PRO_PLAN_CODE?.trim();
+  const envProPlanCodeAnnual = process.env.PAYSTACK_PRO_PLAN_CODE_ANNUAL?.trim();
+  const planCode = String(
+    transaction?.plan_object?.plan_code ||
+      transaction?.plan?.plan_code ||
+      "",
+  ).trim();
+  const planName = String(
+    transaction?.plan_object?.name ||
+      transaction?.plan?.name ||
+      "",
+  ).trim().toLowerCase();
+  const amount = Number(
+    transaction?.plan_object?.amount ??
+      transaction?.plan?.amount ??
+      transaction?.amount,
+  );
+
+  if (envEnterprisePlanCode && planCode === envEnterprisePlanCode) {
+    return ENTERPRISE_PLAN_TYPE;
+  }
+
+  if (
+    (envProPlanCodeMonthly && planCode === envProPlanCodeMonthly) ||
+    (envProPlanCodeAnnual && planCode === envProPlanCodeAnnual)
+  ) {
+    return PRO_PLAN_TYPE;
+  }
+
+  if (planName.includes("enterprise")) {
+    return ENTERPRISE_PLAN_TYPE;
+  }
+
+  if (planName.includes("pro")) {
+    return PRO_PLAN_TYPE;
+  }
+
+  if (Number.isFinite(amount) && amount === DEFAULT_ENTERPRISE_AMOUNT_KOBO) {
+    return ENTERPRISE_PLAN_TYPE;
+  }
+
+  return null;
+};
+
+const resolveTransactionPlanType = (transaction, fallbackPlanType = PRO_PLAN_TYPE) => {
+  const metadataPlanType = String(transaction?.metadata?.plan || "")
+    .trim()
+    .toUpperCase();
+
+  if (SUPPORTED_PLAN_TYPES.includes(metadataPlanType)) {
+    return metadataPlanType;
+  }
+
+  const inferredPlanType = inferPlanTypeFromPlanDetails(transaction);
+  if (inferredPlanType) {
+    return inferredPlanType;
+  }
+
+  return parseRequestedPlanType(fallbackPlanType);
+};
+
+export const ensurePaystackPlan = async (
+  clinic,
+  planType = PRO_PLAN_TYPE,
+  interval = MONTHLY_INTERVAL,
+) => {
+  const config = getPlanConfig(planType, interval);
 
   // If env plan code is set, use it. We'll optionally save it to clinic later
   // if they successfully subscribe.
@@ -239,9 +356,15 @@ export const ensurePaystackPlan = async (clinic, interval = MONTHLY_INTERVAL) =>
   return createdPlan.plan_code;
 };
 
-export const initializePaystackSubscription = async ({ clinic, actor, interval = MONTHLY_INTERVAL }) => {
-  const planCode = await ensurePaystackPlan(clinic, interval);
-  const config = getPlanConfig(interval);
+export const initializePaystackSubscription = async ({
+  clinic,
+  actor,
+  planType = PRO_PLAN_TYPE,
+  interval = MONTHLY_INTERVAL,
+}) => {
+  const normalizedPlanType = parseRequestedPlanType(planType);
+  const planCode = await ensurePaystackPlan(clinic, normalizedPlanType, interval);
+  const config = getPlanConfig(normalizedPlanType, interval);
   const reference = `pcare-${clinic.id}-${Date.now()}`;
   const callbackBaseUrl = resolveBaseUrl().replace(/\/$/, "");
 
@@ -259,7 +382,7 @@ export const initializePaystackSubscription = async ({ clinic, actor, interval =
         clinicName: clinic.name,
         actorId: actor.id,
         actorEmail: actor.email,
-        plan: "PRO",
+        plan: normalizedPlanType,
         interval: config.interval,
         custom_fields: buildCustomFields(clinic),
       },
@@ -287,6 +410,8 @@ export const syncClinicWithTransaction = async (transaction) => {
     return null;
   }
 
+  const resolvedPlanType = resolveTransactionPlanType(transaction, clinic.plan);
+
   const subscriptionEnds = computeSubscriptionEndDate({
     paidAt: transaction?.paid_at || transaction?.paidAt || transaction?.created_at,
     interval:
@@ -299,7 +424,7 @@ export const syncClinicWithTransaction = async (transaction) => {
   const updatedClinic = await prisma.clinic.update({
     where: { id: clinic.id },
     data: {
-      plan: "PRO",
+      plan: resolvedPlanType,
       paystackCustomerCode:
         transaction?.customer?.customer_code || clinic.paystackCustomerCode,
       paystackPlanCode:
@@ -360,7 +485,6 @@ export const disableClinicSubscription = async (clinicId, status = "disabled") =
   prisma.clinic.update({
     where: { id: clinicId },
     data: {
-      plan: "PRO",
       paystackSubscriptionStatus: status,
       subscriptionEnds: null,
     },

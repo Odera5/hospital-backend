@@ -14,6 +14,7 @@ model User {
   password     String
   role         String        @default("nurse")
   clinicId     String
+  assignedBranchIds String[] @default([])
   isActive     Boolean       @default(true)
   emailVerified Boolean      @default(false)
   emailVerificationToken String?
@@ -33,6 +34,7 @@ model User {
 model Patient {
   id             String        @id @default(cuid())
   clinicId       String
+  branchId       String
   cardNumberSequence Int?
   name           String
   searchName     String?
@@ -48,6 +50,7 @@ model Patient {
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
   clinic         Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  branch         Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
   records        Record[]
   appointments   Appointment[]
   waitingEntries WaitingRoom[]
@@ -55,16 +58,22 @@ model Patient {
   auditLogs      AuditLog[]
 
   @@index([clinicId, createdAt])
+  @@index([branchId, createdAt])
   @@index([clinicId, isDeleted])
+  @@index([branchId, isDeleted])
   @@index([clinicId, isDeleted, searchName])
+  @@index([branchId, isDeleted, searchName])
   @@index([clinicId, isDeleted, searchCardNumber])
+  @@index([branchId, isDeleted, searchCardNumber])
   @@index([clinicId, isDeleted, ageNumber])
+  @@index([branchId, isDeleted, ageNumber])
   @@unique([clinicId, cardNumberSequence])
 }
 
 model PendingIntake {
   id             String    @id @default(cuid())
   clinicId       String
+  branchId       String
   name           String
   age            String
   gender         String    @default("other")
@@ -77,8 +86,10 @@ model PendingIntake {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   clinic         Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  branch         Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
 
   @@index([clinicId, status, createdAt])
+  @@index([branchId, status, createdAt])
 }
 
 model Clinic {
@@ -95,6 +106,7 @@ model Clinic {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   users          User[]
+  branches       Branch[]
   patients       Patient[]
   pendingIntakes PendingIntake[]
   plan           PlanType  @default(PRO)
@@ -102,9 +114,7 @@ model Clinic {
   brandColor     String?
   intakeEnabled  Boolean   @default(false)
   intakePublicToken String? @unique
-  reminderTimezone String   @default("Africa/Lagos")
-  reminderWindowStartHour Int @default(8)
-  reminderWindowEndHour Int   @default(18)
+  reminderOffsets Int[]     @default([1440, 120])
   stripeCustomerId String?
   paystackCustomerCode String?
   paystackPlanCode String?
@@ -115,6 +125,34 @@ model Clinic {
   paystackLastReference String?
   paystackNextPaymentDate DateTime?
   subscriptionEnds DateTime?
+}
+
+model Branch {
+  id        String   @id @default(cuid())
+  clinicId  String
+  name      String
+  slug      String
+  country   String   @default("")
+  city      String   @default("")
+  area      String   @default("")
+  address   String   @default("")
+  phone     String   @default("")
+  isActive  Boolean  @default(true)
+  isPrimary Boolean  @default(false)
+  intakeEnabled Boolean @default(false)
+  intakePublicToken String? @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  clinic     Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patients   Patient[]
+  pendingIntakes PendingIntake[]
+  records    Record[]
+  appointments Appointment[]
+  waitingEntries WaitingRoom[]
+  invoices   Invoice[]
+
+  @@unique([clinicId, slug])
+  @@index([clinicId, isActive, createdAt])
 }
 
 model Record {
@@ -146,7 +184,9 @@ model Record {
   updatedAt             DateTime @updatedAt
   isDeleted             Boolean  @default(false)
   deletedAt             DateTime?
+  branchId              String?
   patient               Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  branch                Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
 
   @@index([patientId, createdAt])
 }
@@ -163,8 +203,7 @@ model Appointment {
   status          String   @default("scheduled")
   reminderEnabled Boolean  @default(false)
   reminderStatus  String   @default("disabled")
-  reminder24hSentAt DateTime?
-  reminder2hSentAt DateTime?
+  remindersSent   Json     @default("[]")
   reminderLastSentAt DateTime?
   reminderLastError String  @default("")
   patientConfirmationStatus String @default("pending")
@@ -177,8 +216,10 @@ model Appointment {
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+  branchId        String?
   patient         Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
   dentist         User?    @relation(fields: [dentistId], references: [id], onDelete: SetNull)
+  branch          Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
 
   @@index([patientId, appointmentDate])
   @@index([dentistId, appointmentDate])
@@ -198,7 +239,9 @@ model WaitingRoom {
   completedAt           DateTime?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
+  branchId              String?
   patient               Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  branch                Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
 
   @@index([status, arrivalTime])
 }
@@ -224,7 +267,9 @@ model Invoice {
   notes          String   @default("")
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+  branchId       String?
   patient        Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  branch         Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
 
   @@index([patientId])
   @@index([status])
@@ -252,4 +297,5 @@ model AuditLog {
 enum PlanType {
   FREE
   PRO
+  ENTERPRISE
 }
