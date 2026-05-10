@@ -12,6 +12,15 @@ const REMINDER_POLL_INTERVAL_MS = 5 * 60 * 1000;
 let transporterPromise = null;
 let reminderIntervalId = null;
 let reminderJobRunning = false;
+let reminderWorkerDisabled = false;
+
+const isMissingRemindersSentColumnError = (error) =>
+  Boolean(
+    error?.message &&
+      String(error.message).includes(
+        'The column `Appointment.remindersSent` does not exist in the current database.',
+      ),
+  );
 
 const isResendConfigured = () =>
   Boolean(process.env.RESEND_API_KEY?.trim() && process.env.EMAIL_FROM?.trim());
@@ -429,7 +438,11 @@ const markReminderSent = async (appointmentId, type, reminderLastError = "") => 
 };
 
 export const processAppointmentReminders = async () => {
-  if (reminderJobRunning || !hasReminderDeliveryConfigured()) {
+  if (
+    reminderWorkerDisabled ||
+    reminderJobRunning ||
+    !hasReminderDeliveryConfigured()
+  ) {
     return;
   }
 
@@ -645,18 +658,39 @@ export const processAppointmentReminders = async () => {
         await markReminderFailure(appointment.id, error.message);
       }
     }
+  } catch (error) {
+    if (isMissingRemindersSentColumnError(error)) {
+      reminderWorkerDisabled = true;
+      console.error(
+        "Appointment reminder worker disabled: database is missing Appointment.remindersSent. Run Prisma migrations on the deployed database.",
+      );
+      return;
+    }
+
+    throw error;
   } finally {
     reminderJobRunning = false;
   }
 };
 
 export const startAppointmentReminderWorker = () => {
-  if (reminderIntervalId || !hasReminderDeliveryConfigured()) {
+  if (
+    reminderWorkerDisabled ||
+    reminderIntervalId ||
+    !hasReminderDeliveryConfigured()
+  ) {
     if (!hasReminderDeliveryConfigured()) {
       console.log(
         "Appointment reminder worker not started: reminder delivery is not configured.",
       );
     }
+
+    if (reminderWorkerDisabled) {
+      console.log(
+        "Appointment reminder worker not started: database schema is missing required reminder columns.",
+      );
+    }
+
     return;
   }
 
