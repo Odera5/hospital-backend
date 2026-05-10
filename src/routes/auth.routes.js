@@ -43,6 +43,26 @@ const router = express.Router();
 const STAFF_ROLES = ["admin", "branch_manager", "doctor", "nurse"];
 const STAFF_MANAGER_ROLES = ["admin", "branch_manager"];
 const BRANCH_MANAGER_MANAGEABLE_ROLES = ["doctor", "nurse"];
+const isProduction = process.env.NODE_ENV === "production";
+const configuredCookieSameSite = String(process.env.COOKIE_SAME_SITE || "")
+  .trim()
+  .toLowerCase();
+const cookieSameSite =
+  configuredCookieSameSite || (isProduction ? "none" : "lax");
+const cookieDomain = String(process.env.COOKIE_DOMAIN || "").trim() || undefined;
+const buildCookieOptions = (maxAge) => ({
+  httpOnly: true,
+  secure: isProduction,
+  sameSite: cookieSameSite,
+  maxAge,
+  ...(cookieDomain ? { domain: cookieDomain } : {}),
+});
+const clearCookieOptions = {
+  httpOnly: true,
+  secure: isProduction,
+  sameSite: cookieSameSite,
+  ...(cookieDomain ? { domain: cookieDomain } : {}),
+};
 const DEFAULT_PROCEDURE_PRESETS = [
   { description: "Consultation", category: "service", unitPrice: 5000 },
   { description: "Scaling and Polishing", category: "procedure", unitPrice: 15000 },
@@ -1120,19 +1140,13 @@ router.post("/login", authLimiter, validateLogin, async (req, res) => {
       data: { refreshToken },
     });
 
-    res.cookie("accessToken", accessToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 15 * 60 * 1000, // 15 mins
-    });
+    res.cookie("accessToken", accessToken, buildCookieOptions(15 * 60 * 1000));
 
-    res.cookie("refreshToken", refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-    });
+    res.cookie(
+      "refreshToken",
+      refreshToken,
+      buildCookieOptions(7 * 24 * 60 * 60 * 1000),
+    );
 
     const branchScope = await resolveSerializedBranchScope({
       clinicId: user.clinicId,
@@ -1299,12 +1313,11 @@ router.post("/refresh-token", async (req, res) => {
     if (!hasActiveProAccess(user.clinic) && user.role === "admin") {
       const sessionId = user.refreshToken.substring(user.refreshToken.length - 15);
       const newAccessToken = generateAccessToken(user, sessionId);
-      res.cookie("accessToken", newAccessToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
-        maxAge: 15 * 60 * 1000,
-      });
+      res.cookie(
+        "accessToken",
+        newAccessToken,
+        buildCookieOptions(15 * 60 * 1000),
+      );
       return res.json({ success: true });
     }
 
@@ -1317,12 +1330,11 @@ router.post("/refresh-token", async (req, res) => {
 
     const sessionId = user.refreshToken.substring(user.refreshToken.length - 15);
     const newAccessToken = generateAccessToken(user, sessionId);
-    res.cookie("accessToken", newAccessToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 15 * 60 * 1000,
-    });
+    res.cookie(
+      "accessToken",
+      newAccessToken,
+      buildCookieOptions(15 * 60 * 1000),
+    );
     res.json({ success: true });
   } catch (error) {
     console.error("Refresh token error:", error);
@@ -1333,8 +1345,8 @@ router.post("/refresh-token", async (req, res) => {
 router.post("/logout", async (req, res) => {
   const refreshToken = req.cookies?.refreshToken || req.body?.refreshToken;
   
-  res.clearCookie("accessToken");
-  res.clearCookie("refreshToken");
+  res.clearCookie("accessToken", clearCookieOptions);
+  res.clearCookie("refreshToken", clearCookieOptions);
 
   if (!refreshToken) return res.sendStatus(204);
 
