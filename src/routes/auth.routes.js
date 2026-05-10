@@ -1160,6 +1160,8 @@ router.post("/login", authLimiter, validateLogin, async (req, res) => {
     }
 
     res.json({
+      accessToken,
+      refreshToken,
       user: serializeUser({
         ...user,
         branchId: branchScope.branchId,
@@ -1318,7 +1320,7 @@ router.post("/refresh-token", async (req, res) => {
         newAccessToken,
         buildCookieOptions(15 * 60 * 1000),
       );
-      return res.json({ success: true });
+      return res.json({ success: true, accessToken: newAccessToken });
     }
 
     if (!hasActiveProAccess(user.clinic)) {
@@ -1335,7 +1337,7 @@ router.post("/refresh-token", async (req, res) => {
       newAccessToken,
       buildCookieOptions(15 * 60 * 1000),
     );
-    res.json({ success: true });
+    res.json({ success: true, accessToken: newAccessToken });
   } catch (error) {
     console.error("Refresh token error:", error);
     res.status(403).json({ message: "Refresh token expired or invalid" });
