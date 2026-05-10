@@ -18,6 +18,8 @@ export const handleValidationErrors = (req, res, next) => {
 export const validateClinicRegistration = [
   body("clinicName").trim().notEmpty().withMessage("Clinic name is required"),
   body("clinicEmail").trim().notEmpty().withMessage("Clinic email is required").isEmail().withMessage("Invalid clinic email address"),
+  body("clinicCountry").trim().notEmpty().withMessage("Clinic country is required"),
+  body("clinicCity").trim().notEmpty().withMessage("Clinic city is required"),
   body("adminName").trim().notEmpty().withMessage("Admin name is required"),
   body("adminEmail").trim().notEmpty().withMessage("Admin email is required").isEmail().withMessage("Invalid admin email address"),
   body("password").notEmpty().withMessage("Password is required").isLength({ min: 6 }).withMessage("Password must be at least 6 characters"),

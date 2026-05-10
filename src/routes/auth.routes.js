@@ -52,22 +52,6 @@ const DEFAULT_PROCEDURE_PRESETS = [
   { description: "Dental X-Ray", category: "lab", unitPrice: 8000 },
   { description: "Medication Dispensing", category: "medication", unitPrice: 3500 },
 ];
-const isEmailVerificationRequired = () => {
-  const configuredValue = String(
-    process.env.EMAIL_VERIFICATION_REQUIRED || "",
-  ).toLowerCase();
-
-  if (configuredValue === "true") {
-    return true;
-  }
-
-  if (configuredValue === "false") {
-    return false;
-  }
-
-  return process.env.NODE_ENV === "production";
-};
-
 const normalizeProcedurePresetPrices = (value) => {
   const incoming =
     Array.isArray(value) && value.length > 0 ? value : DEFAULT_PROCEDURE_PRESETS;
@@ -1096,7 +1080,7 @@ router.post("/login", authLimiter, validateLogin, async (req, res) => {
     if (!user.isActive) {
       return res.status(403).json({ message: "Your staff account has been deactivated" });
     }
-    if (isEmailVerificationRequired() && !user.emailVerified) {
+    if (!user.emailVerified) {
       return res.status(403).json({
         message:
           "Please confirm your email address to activate your account before signing in.",
@@ -1293,6 +1277,12 @@ router.post("/refresh-token", async (req, res) => {
     }
     if (!user.isActive) {
       return res.status(403).json({ message: "Your staff account has been deactivated" });
+    }
+    if (!user.emailVerified) {
+      return res.status(403).json({
+        message:
+          "Please confirm your email address to activate your account before signing in.",
+      });
     }
     if (!user.clinic?.isActive) {
       return res.status(403).json({

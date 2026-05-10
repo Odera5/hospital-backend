@@ -35,6 +35,7 @@ export const protect = async (req, res, next) => {
         u.role,
         u."assignedBranchIds",
         u."isActive",
+        u."emailVerified",
         u."clinicId",
         u."refreshToken",
         c."isActive" AS "clinicIsActive",
@@ -51,6 +52,12 @@ export const protect = async (req, res, next) => {
     if (!user) return res.status(401).json({ message: "User not found" });
     if (!user.isActive) {
       return res.status(403).json({ message: "Your staff account has been deactivated" });
+    }
+    if (!user.emailVerified) {
+      return res.status(403).json({
+        message:
+          "Please confirm your email address to activate your account before signing in.",
+      });
     }
     if (!user.clinicIsActive) {
       return res.status(403).json({
