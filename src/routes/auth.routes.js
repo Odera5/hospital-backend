@@ -161,6 +161,7 @@ const serializeUser = (user) => ({
   name: user.name,
   email: user.email,
   role: user.role,
+  customRoleTitle: user.customRoleTitle || null,
   clinicId: user.clinicId,
   assignedBranchIds: normalizeAssignedBranchIds(user.assignedBranchIds),
   branchId: user.branchId || null,
@@ -781,7 +782,7 @@ router.post("/register-clinic", authLimiter, validateClinicRegistration, async (
 
 router.post("/signup", protect, authorizeRoles(...STAFF_MANAGER_ROLES), validateSignup, async (req, res) => {
   try {
-    const { name, email, password, role, assignedBranchIds } = req.body;
+    const { name, email, password, role, customRoleTitle, assignedBranchIds } = req.body;
     const requestedRole = role || "nurse";
 
     if (!name?.trim() || !email?.trim() || !password) {
@@ -857,6 +858,7 @@ router.post("/signup", protect, authorizeRoles(...STAFF_MANAGER_ROLES), validate
         email: normalizedEmail,
         password: hashedPassword,
         role: requestedRole,
+        customRoleTitle: customRoleTitle?.trim() || null,
         clinicId: req.user.clinicId,
         assignedBranchIds: branchAssignment.branchIds,
         emailVerified: false,
