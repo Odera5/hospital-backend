@@ -535,7 +535,7 @@ router.post("/clinic-profile/intake-link/regenerate", protect, authorizeRoles("a
   }
 });
 
-router.post("/clinic-profile/deactivate/initiate", protect, authorizeRoles("admin"), async (req, res) => {
+router.post("/clinic-profile/deactivate/initiate", protect, authorizeRoles("admin"), authLimiter, async (req, res) => {
   try {
     const { password } = req.body;
     if (!password) {
@@ -598,7 +598,7 @@ router.post("/clinic-profile/deactivate/initiate", protect, authorizeRoles("admi
   }
 });
 
-router.post("/clinic-profile/deactivate/verify", protect, authorizeRoles("admin"), async (req, res) => {
+router.post("/clinic-profile/deactivate/verify", protect, authorizeRoles("admin"), authLimiter, async (req, res) => {
   try {
     const { otp } = req.body;
     if (!otp) {
@@ -780,7 +780,7 @@ router.post("/register-clinic", authLimiter, validateClinicRegistration, async (
   }
 });
 
-router.post("/signup", protect, authorizeRoles(...STAFF_MANAGER_ROLES), validateSignup, async (req, res) => {
+router.post("/signup", protect, authorizeRoles(...STAFF_MANAGER_ROLES), authLimiter, validateSignup, async (req, res) => {
   try {
     const { name, email, password, role, customRoleTitle, assignedBranchIds } = req.body;
     const requestedRole = role || "nurse";
@@ -1098,7 +1098,7 @@ router.post("/login", authLimiter, validateLogin, async (req, res) => {
 
     const user = await getUserByEmail(email.toLowerCase().trim());
 
-    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user) return res.status(401).json({ message: "Invalid login credentials" });
     if (!user.isActive) {
       return res.status(403).json({ message: "Your staff account has been deactivated" });
     }
@@ -1131,7 +1131,7 @@ router.post("/login", authLimiter, validateLogin, async (req, res) => {
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ message: "Invalid password" });
+    if (!isMatch) return res.status(401).json({ message: "Invalid login credentials" });
 
     const refreshToken = generateRefreshToken(user);
     const sessionId = refreshToken.substring(refreshToken.length - 15);
@@ -1367,7 +1367,7 @@ router.post("/logout", async (req, res) => {
   }
 });
 
-router.post("/forgot-password", async (req, res) => {
+router.post("/forgot-password", authLimiter, async (req, res) => {
   try {
     const email = String(req.body?.email || "")
       .toLowerCase()
@@ -1414,7 +1414,7 @@ router.post("/forgot-password", async (req, res) => {
   }
 });
 
-router.post("/reset-password", async (req, res) => {
+router.post("/reset-password", authLimiter, async (req, res) => {
   try {
     const { token, newPassword } = req.body;
 
