@@ -352,11 +352,13 @@ router.get("/clinic-profile", protect, async (req, res) => {
       return res.status(404).json({ message: "Clinic profile not found" });
     }
 
+    const isEnterprise = clinic.plan === "ENTERPRISE";
+
     res.json({
       clinic: {
         ...serializeClinic(clinic),
-        intakeEnabled: Boolean(currentBranch?.intakeEnabled),
-        intakePublicToken: currentBranch?.intakePublicToken || null,
+        intakeEnabled: isEnterprise ? Boolean(currentBranch?.intakeEnabled) : Boolean(clinic.intakeEnabled),
+        intakePublicToken: isEnterprise ? (currentBranch?.intakePublicToken || null) : (clinic.intakePublicToken || null),
       },
       activeBranch: currentBranch ? serializeBranch(currentBranch) : req.user.branch || null,
       branches: Array.isArray(req.user.availableBranches) ? req.user.availableBranches : [],
@@ -455,35 +457,63 @@ router.put("/clinic-profile/intake-link", protect, authorizeRoles("admin", "bran
       });
     }
 
-    const currentBranch = await getCurrentActiveBranch(req);
+    const isEnterprise = existingClinic.plan === "ENTERPRISE";
 
-    if (!currentBranch) {
-      return res.status(404).json({ message: "No active branch is available for this staff account." });
+    if (isEnterprise) {
+      const currentBranch = await getCurrentActiveBranch(req);
+
+      if (!currentBranch) {
+        return res.status(404).json({ message: "No active branch is available for this staff account." });
+      }
+
+      const intakePublicToken =
+        requestedEnabled && !currentBranch.intakePublicToken
+          ? createIntakePublicToken()
+          : currentBranch.intakePublicToken;
+
+      const branch = await prisma.branch.update({
+        where: { id: currentBranch.id },
+        data: {
+          intakeEnabled: requestedEnabled,
+          intakePublicToken,
+        },
+      });
+
+      return res.json({
+        message: requestedEnabled
+          ? "Patient intake link enabled successfully for this branch"
+          : "Patient intake link disabled successfully for this branch",
+        clinic: {
+          intakeEnabled: branch.intakeEnabled,
+          intakePublicToken: branch.intakePublicToken,
+        },
+        branch: serializeBranch(branch),
+      });
+    } else {
+      // Clinic-level intake for Professional plan
+      const intakePublicToken =
+        requestedEnabled && !existingClinic.intakePublicToken
+          ? createIntakePublicToken()
+          : existingClinic.intakePublicToken;
+
+      const clinic = await prisma.clinic.update({
+        where: { id: existingClinic.id },
+        data: {
+          intakeEnabled: requestedEnabled,
+          intakePublicToken,
+        },
+      });
+
+      return res.json({
+        message: requestedEnabled
+          ? "Patient intake link enabled successfully"
+          : "Patient intake link disabled successfully",
+        clinic: {
+          intakeEnabled: clinic.intakeEnabled,
+          intakePublicToken: clinic.intakePublicToken,
+        },
+      });
     }
-
-    const intakePublicToken =
-      requestedEnabled && !currentBranch.intakePublicToken
-        ? createIntakePublicToken()
-        : currentBranch.intakePublicToken;
-
-    const branch = await prisma.branch.update({
-      where: { id: currentBranch.id },
-      data: {
-        intakeEnabled: requestedEnabled,
-        intakePublicToken,
-      },
-    });
-
-    res.json({
-      message: requestedEnabled
-        ? "Patient intake link enabled successfully for this branch"
-        : "Patient intake link disabled successfully for this branch",
-      clinic: {
-        intakeEnabled: branch.intakeEnabled,
-        intakePublicToken: branch.intakePublicToken,
-      },
-      branch: serializeBranch(branch),
-    });
   } catch (error) {
     console.error("Update intake link settings error:", error);
     res.status(500).json({ message: "Failed to update patient intake link settings" });
@@ -507,28 +537,49 @@ router.post("/clinic-profile/intake-link/regenerate", protect, authorizeRoles("a
       });
     }
 
-    const currentBranch = await getCurrentActiveBranch(req);
+    const isEnterprise = existingClinic.plan === "ENTERPRISE";
 
-    if (!currentBranch) {
-      return res.status(404).json({ message: "No active branch is available for this staff account." });
+    if (isEnterprise) {
+      const currentBranch = await getCurrentActiveBranch(req);
+
+      if (!currentBranch) {
+        return res.status(404).json({ message: "No active branch is available for this staff account." });
+      }
+
+      const branch = await prisma.branch.update({
+        where: { id: currentBranch.id },
+        data: {
+          intakeEnabled: true,
+          intakePublicToken: createIntakePublicToken(),
+        },
+      });
+
+      return res.json({
+        message: "Patient intake link regenerated successfully for this branch",
+        clinic: {
+          intakeEnabled: branch.intakeEnabled,
+          intakePublicToken: branch.intakePublicToken,
+        },
+        branch: serializeBranch(branch),
+      });
+    } else {
+      // Clinic-level intake for Professional plan
+      const clinic = await prisma.clinic.update({
+        where: { id: existingClinic.id },
+        data: {
+          intakeEnabled: true,
+          intakePublicToken: createIntakePublicToken(),
+        },
+      });
+
+      return res.json({
+        message: "Patient intake link regenerated successfully",
+        clinic: {
+          intakeEnabled: clinic.intakeEnabled,
+          intakePublicToken: clinic.intakePublicToken,
+        },
+      });
     }
-
-    const branch = await prisma.branch.update({
-      where: { id: currentBranch.id },
-      data: {
-        intakeEnabled: true,
-        intakePublicToken: createIntakePublicToken(),
-      },
-    });
-
-    res.json({
-      message: "Patient intake link regenerated successfully for this branch",
-      clinic: {
-        intakeEnabled: branch.intakeEnabled,
-        intakePublicToken: branch.intakePublicToken,
-      },
-      branch: serializeBranch(branch),
-    });
   } catch (error) {
     console.error("Regenerate intake link error:", error);
     res.status(500).json({ message: "Failed to regenerate patient intake link" });

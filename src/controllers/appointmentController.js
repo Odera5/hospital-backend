@@ -182,8 +182,6 @@ const buildReminderUpdate = ({
   };
 
   if (resetSchedule) {
-    update.reminder24hSentAt = null;
-    update.reminder2hSentAt = null;
     update.reminderLastSentAt = null;
   }
 
