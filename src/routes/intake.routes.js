@@ -72,16 +72,29 @@ const validateIntakeAccess = (clinic, branch, accessToken) => {
     return getUpgradeRequiredMessage();
   }
 
-  if (!branch) {
-    return "This patient intake link is invalid or has been revoked.";
-  }
+  const isEnterprise = clinic.plan === "ENTERPRISE";
 
-  if (!branch.intakeEnabled) {
-    return "This branch has not enabled patient intake access right now.";
-  }
+  if (isEnterprise) {
+    if (!branch) {
+      return "This patient intake link is invalid or has been revoked.";
+    }
 
-  if (!branch.intakePublicToken || !accessToken || accessToken !== branch.intakePublicToken) {
-    return "This patient intake link is invalid or has been revoked.";
+    if (!branch.intakeEnabled) {
+      return "This branch has not enabled patient intake access right now.";
+    }
+
+    if (!branch.intakePublicToken || !accessToken || accessToken !== branch.intakePublicToken) {
+      return "This patient intake link is invalid or has been revoked.";
+    }
+  } else {
+    // Clinic-level for PRO plan
+    if (!clinic.intakeEnabled) {
+      return "This clinic has not enabled patient intake access right now.";
+    }
+
+    if (!clinic.intakePublicToken || !accessToken || accessToken !== clinic.intakePublicToken) {
+      return "This patient intake link is invalid or has been revoked.";
+    }
   }
 
   return null;
@@ -99,11 +112,15 @@ router.get("/:clinicId", async (req, res) => {
       select: intakeAccessClinicSelect,
     });
 
-    const branch = await getActiveBranchForIntake({
-      clinicId,
-      branchId: requestedBranchId,
-      accessToken,
-    });
+    const isEnterprise = clinic?.plan === "ENTERPRISE";
+
+    const branch = isEnterprise
+      ? await getActiveBranchForIntake({
+          clinicId,
+          branchId: requestedBranchId,
+          accessToken,
+        })
+      : null;
 
     const accessError = validateIntakeAccess(clinic, branch, accessToken);
     if (accessError) {
@@ -113,12 +130,16 @@ router.get("/:clinicId", async (req, res) => {
     const { intakePublicToken, ...publicClinic } = clinic;
     res.json({
       ...publicClinic,
-      branch: {
-        id: branch.id,
-        name: branch.name,
-        city: branch.city,
-        area: branch.area,
-      },
+      ...(isEnterprise && branch
+        ? {
+            branch: {
+              id: branch.id,
+              name: branch.name,
+              city: branch.city,
+              area: branch.area,
+            },
+          }
+        : {}),
     });
   } catch (error) {
     console.error("Intake Fetch Error:", error);
@@ -143,11 +164,15 @@ router.get("/:clinicId/available-slots", async (req, res) => {
       select: intakeAccessClinicSelect,
     });
 
-    const branch = await getActiveBranchForIntake({
-      clinicId,
-      branchId: requestedBranchId,
-      accessToken,
-    });
+    const isEnterprise = clinic?.plan === "ENTERPRISE";
+
+    const branch = isEnterprise
+      ? await getActiveBranchForIntake({
+          clinicId,
+          branchId: requestedBranchId,
+          accessToken,
+        })
+      : null;
 
     const accessError = validateIntakeAccess(clinic, branch, accessToken);
     if (accessError) {
@@ -162,7 +187,11 @@ router.get("/:clinicId/available-slots", async (req, res) => {
 
     const booked = await prisma.appointment.findMany({
       where: {
-        patient: { clinicId, branchId: branch.id, isDeleted: false },
+        patient: {
+          clinicId,
+          isDeleted: false,
+          ...(isEnterprise ? { branchId: branch.id } : {}),
+        },
         appointmentDate: {
           gte: startOfDay,
           lte: endOfDay,
@@ -199,13 +228,17 @@ router.post("/:clinicId", intakeLimiter, validatePublicIntake, async (req, res) 
       select: intakeAccessClinicSelect,
     });
 
+    const isEnterprise = clinic?.plan === "ENTERPRISE";
+
     const accessToken = String(req.query?.access || req.body?.access || "").trim();
     const requestedBranchId = String(req.query?.branchId || req.body?.branchId || "").trim();
-    const branch = await getActiveBranchForIntake({
-      clinicId,
-      branchId: requestedBranchId,
-      accessToken,
-    });
+    const branch = isEnterprise
+      ? await getActiveBranchForIntake({
+          clinicId,
+          branchId: requestedBranchId,
+          accessToken,
+        })
+      : null;
 
     const accessError = validateIntakeAccess(clinic, branch, accessToken);
     if (accessError) {
@@ -225,10 +258,33 @@ router.post("/:clinicId", intakeLimiter, validatePublicIntake, async (req, res) 
       return res.status(400).json({ message: "Name and age are required" });
     }
 
+    let targetBranchId = null;
+    if (isEnterprise) {
+      targetBranchId = branch.id;
+    } else {
+      const primaryBranch = await prisma.branch.findFirst({
+        where: { clinicId, isPrimary: true },
+        select: { id: true },
+      });
+      if (primaryBranch) {
+        targetBranchId = primaryBranch.id;
+      } else {
+        const anyBranch = await prisma.branch.findFirst({
+          where: { clinicId },
+          select: { id: true },
+        });
+        targetBranchId = anyBranch?.id;
+      }
+    }
+
+    if (!targetBranchId) {
+      return res.status(400).json({ message: "No active branch is available for intake." });
+    }
+
     const pendingIntake = await prisma.pendingIntake.create({
       data: {
         clinicId,
-        branchId: branch.id,
+        branchId: targetBranchId,
         name,
         age,
         gender,
