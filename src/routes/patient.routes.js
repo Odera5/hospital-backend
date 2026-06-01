@@ -26,6 +26,23 @@ router.use(enforceSubscriptionState({ allowAdminReadOnly: true }));
 
 const normalizeText = (value) => (typeof value === "string" ? value.trim() : "");
 
+const isCardNumberMatch = (cardNumberStr, searchStr) => {
+  if (!cardNumberStr || !searchStr) return false;
+  const cleanCardNumber = String(cardNumberStr).trim().toLowerCase();
+  const cleanSearch = String(searchStr).trim().toLowerCase();
+
+  if (cleanCardNumber.includes(cleanSearch)) return true;
+
+  const cardDigitsMatch = cleanCardNumber.match(/(?:p-?|P-?)?(\d+)/i);
+  const searchDigitsMatch = cleanSearch.match(/^(?:p-?|P-?)?(\d+)$/i);
+
+  if (cardDigitsMatch && searchDigitsMatch) {
+    return parseInt(cardDigitsMatch[1], 10) === parseInt(searchDigitsMatch[1], 10);
+  }
+
+  return false;
+};
+
 const normalizeTeeth = (value) => {
   if (!value) return [];
 
@@ -181,35 +198,47 @@ const parsePositiveInteger = (value, fallback) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
-const buildPatientSearchWhere = (search) =>
-  search
-    ? {
-        OR: [
-          {
-            searchName: {
-              contains: search,
-            },
-          },
-          {
-            searchCardNumber: {
-              contains: search,
-            },
-          },
-          {
-            phone: {
-              contains: search,
-              mode: "insensitive",
-            },
-          },
-          {
-            email: {
-              contains: search,
-              mode: "insensitive",
-            },
-          },
-        ],
-      }
-    : {};
+const buildPatientSearchWhere = (search) => {
+  if (!search) return {};
+
+  const conditions = [
+    {
+      searchName: {
+        contains: search,
+      },
+    },
+    {
+      searchCardNumber: {
+        contains: search,
+      },
+    },
+    {
+      phone: {
+        contains: search,
+        mode: "insensitive",
+      },
+    },
+  ];
+
+  const parsedAge = parseInt(search, 10);
+  if (!isNaN(parsedAge) && String(parsedAge) === search.trim()) {
+    conditions.push({
+      ageNumber: parsedAge,
+    });
+  }
+
+  const cardMatch = search.trim().match(/^(?:p-?|P-?)?(\d+)$/i);
+  if (cardMatch) {
+    const sequenceNumber = parseInt(cardMatch[1], 10);
+    if (!isNaN(sequenceNumber)) {
+      conditions.push({
+        cardNumberSequence: sequenceNumber,
+      });
+    }
+  }
+
+  return { OR: conditions };
+};
 
 const buildPatientSortOrder = (sortBy, sortDirection) => {
   if (sortBy === "name") return { searchName: sortDirection };
@@ -369,22 +398,18 @@ router.get(
             name: decrypted.name,
             cardNumber: decrypted.cardNumber,
             phone: decrypted.phone,
-            email: decrypted.email,
+            age: decrypted.age,
           };
         })
         .filter((patient) => {
           if (!search || canUseIndexedSearch) return true;
 
-          const searchableValues = [
-            patient?.name,
-            patient?.cardNumber,
-            patient?.phone,
-            patient?.email,
-          ]
-            .filter(Boolean)
-            .map((value) => String(value).toLowerCase());
+          const hasNameMatch = patient?.name && String(patient.name).toLowerCase().includes(search);
+          const hasPhoneMatch = patient?.phone && String(patient.phone).toLowerCase().includes(search);
+          const hasAgeMatch = patient?.age && String(patient.age).toLowerCase().includes(search);
+          const hasCardMatch = isCardNumberMatch(patient?.cardNumber, search);
 
-          return searchableValues.some((value) => value.includes(search));
+          return hasNameMatch || hasPhoneMatch || hasAgeMatch || hasCardMatch;
         })
         .slice(0, limit);
 
@@ -478,11 +503,11 @@ router.get(
         .filter((patient) => {
           if (!search) return true;
 
-          const searchableValues = [patient?.name, patient?.cardNumber]
-            .filter(Boolean)
-            .map((value) => String(value).toLowerCase());
+          const hasNameMatch = patient?.name && String(patient.name).toLowerCase().includes(search);
+          const hasAgeMatch = patient?.age && String(patient.age).toLowerCase().includes(search);
+          const hasCardMatch = isCardNumberMatch(patient?.cardNumber, search);
 
-          return searchableValues.some((value) => value.includes(search));
+          return hasNameMatch || hasAgeMatch || hasCardMatch;
         });
 
       const sortedPatients = sortPatientsCollection(
@@ -588,11 +613,11 @@ router.get(
         .filter((patient) => {
           if (!search) return true;
 
-          const searchableValues = [patient?.name, patient?.cardNumber]
-            .filter(Boolean)
-            .map((value) => String(value).toLowerCase());
+          const hasNameMatch = patient?.name && String(patient.name).toLowerCase().includes(search);
+          const hasAgeMatch = patient?.age && String(patient.age).toLowerCase().includes(search);
+          const hasCardMatch = isCardNumberMatch(patient?.cardNumber, search);
 
-          return searchableValues.some((value) => value.includes(search));
+          return hasNameMatch || hasAgeMatch || hasCardMatch;
         });
 
       const sortedPatients = sortPatientsCollection(

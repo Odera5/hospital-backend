@@ -12,6 +12,7 @@ import {
   isSlotAvailableForDuration,
   listAvailableSlots,
 } from "../utils/appointmentScheduling.js";
+import { sendBookingConfirmationEmail } from "../services/appointmentReminderService.js";
 const appointmentPatientSelect = {
   id: true,
   clinicId: true,
@@ -183,6 +184,7 @@ const buildReminderUpdate = ({
 
   if (resetSchedule) {
     update.reminderLastSentAt = null;
+    update.remindersSent = [];
   }
 
   return update;
@@ -488,6 +490,22 @@ export const createAppointment = async (req, res) => {
         },
       },
     });
+
+    if (isEmailConfigured()) {
+      const decryptedPatient = toDecryptedPatient(appointment.patient);
+      if (decryptedPatient?.email) {
+        sendBookingConfirmationEmail({
+          email: decryptedPatient.email,
+          patientName: decryptedPatient.name,
+          clinicName: clinic?.name,
+          appointmentDate: appointment.appointmentDate,
+          timeSlot: appointment.timeSlot,
+          responseToken: appointment.patientResponseToken,
+        }).catch((err) => {
+          console.error("Failed to send booking confirmation email:", err);
+        });
+      }
+    }
 
     res.status(201).json(
       serializeAppointment({

@@ -272,6 +272,73 @@ const buildReminderSmsCopy = ({
   ].join("\n");
 };
 
+const buildBookingConfirmationEmailCopy = ({
+  patientName,
+  clinicName,
+  appointmentDate,
+  timeSlot,
+  responseToken,
+}) => {
+  const dateObj = appointmentDate instanceof Date ? appointmentDate : new Date(appointmentDate);
+  const formattedDate = dateObj.toLocaleDateString("en-NG", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+  
+  const title = "Appointment Booked Successfully";
+  const intro = "Your appointment has been successfully scheduled. Here are the details of your booking:";
+  
+  const { confirmUrl, rescheduleUrl } = buildReminderLinks(responseToken);
+
+  return {
+    subject: `Appointment Booked - ${clinicName || "Your Clinic"}`,
+    text: [
+      `Hello ${patientName || "there"},`,
+      "",
+      intro,
+      "",
+      `Clinic: ${clinicName || "Your clinic"}`,
+      `Date: ${formattedDate}`,
+      `Time: ${timeSlot}`,
+      "",
+      `Confirm: ${confirmUrl}`,
+      `Request reschedule: ${rescheduleUrl}`,
+      "",
+      "If you need to reschedule, please contact the clinic as soon as possible.",
+    ].join("\n"),
+    html: `
+      <div style="font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; padding: 32px 16px;">
+        <div style="max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 18px; padding: 40px 32px; border: 1px solid #e2e8f0; box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);">
+          <p style="margin: 0 0 10px; color: #0f766e; font-size: 12px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase;">Booking Confirmation</p>
+          <h1 style="margin: 0 0 16px; color: #0f172a; font-size: 26px; line-height: 1.2;">${title}</h1>
+          <p style="margin: 0 0 24px; color: #475569; font-size: 16px; line-height: 1.6;">
+            Hello ${patientName || "there"},<br /><br />
+            ${intro}
+          </p>
+          <div style="background: linear-gradient(135deg, #ecfeff, #f8fafc); border: 1px solid #bae6fd; border-radius: 16px; padding: 20px 22px; margin-bottom: 24px;">
+            <p style="margin: 0 0 8px; color: #0f172a; font-size: 15px;"><strong>Clinic:</strong> ${clinicName || "Your clinic"}</p>
+            <p style="margin: 0 0 8px; color: #0f172a; font-size: 15px;"><strong>Date:</strong> ${formattedDate}</p>
+            <p style="margin: 0; color: #0f172a; font-size: 15px;"><strong>Time:</strong> ${timeSlot}</p>
+          </div>
+          <div style="margin-bottom: 24px; display: flex; flex-wrap: wrap; gap: 12px;">
+            <a href="${confirmUrl}" style="display: inline-block; background-color: #0f766e; color: #ffffff; text-decoration: none; padding: 14px 22px; border-radius: 12px; font-weight: 700; font-size: 14px;">
+              Confirm Appointment
+            </a>
+            <a href="${rescheduleUrl}" style="display: inline-block; background-color: #fff7ed; color: #c2410c; text-decoration: none; padding: 14px 22px; border-radius: 12px; font-weight: 700; font-size: 14px; border: 1px solid #fdba74;">
+              Request Reschedule
+            </a>
+          </div>
+          <p style="margin: 0; color: #64748b; font-size: 14px; line-height: 1.6;">
+            If you need to reschedule, please contact the clinic as soon as possible.
+          </p>
+        </div>
+      </div>
+    `,
+  };
+};
+
 const sendReminderEmail = async ({
   email,
   patientName,
@@ -287,6 +354,56 @@ const sendReminderEmail = async ({
     appointmentDate,
     timeSlot,
     type,
+    responseToken,
+  });
+
+  if (isResendConfigured()) {
+    const response = await fetch(RESEND_API_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: `PrimuxCare <${getSenderEmail()}>`,
+        to: [email],
+        subject,
+        text,
+        html,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Resend API error: ${response.status} ${errorText}`);
+    }
+
+    return;
+  }
+
+  const transporter = await getTransporter();
+  await transporter.sendMail({
+    from: `"PrimuxCare" <${getSenderEmail()}>`,
+    to: email,
+    subject,
+    text,
+    html,
+  });
+};
+
+export const sendBookingConfirmationEmail = async ({
+  email,
+  patientName,
+  clinicName,
+  appointmentDate,
+  timeSlot,
+  responseToken,
+}) => {
+  const { subject, text, html } = buildBookingConfirmationEmailCopy({
+    patientName,
+    clinicName,
+    appointmentDate,
+    timeSlot,
     responseToken,
   });
 
@@ -569,7 +686,10 @@ export const processAppointmentReminders = async () => {
 
       const timeUntilAppointmentMs = appointmentStart.getTime() - now.getTime();
       
-      const clinicOffsets = Array.isArray(clinic?.reminderOffsets) ? clinic.reminderOffsets : [1440, 120];
+      const clinicOffsets = (Array.isArray(clinic?.reminderOffsets) ? clinic.reminderOffsets : [1440, 120])
+        .map(Number)
+        .filter((n) => Number.isFinite(n) && n > 0)
+        .sort((a, b) => b - a);
       const remindersSent = Array.isArray(appointment.remindersSent) ? appointment.remindersSent : [];
       
       // Find the first matching offset that hasn't been sent and is due
