@@ -15,6 +15,7 @@ import pendingIntakesRoutes from "./routes/pendingIntakes.routes.js";
 import billingRoutes from "./routes/billing.routes.js";
 import dashboardRoutes from "./routes/dashboard.routes.js";
 import branchRoutes from "./routes/branch.routes.js";
+import auditLogRoutes from "./routes/auditLog.routes.js";
 import { apiLimiter } from "./middleware/rateLimit.js";
 import { logger } from "./middleware/logger.js";
 import { handlePaystackWebhook } from "./controllers/billingController.js";
@@ -138,6 +139,7 @@ app.use("/api/analytics", analyticsRoutes);
 app.use("/api/intake", intakeRoutes);
 app.use("/api/pending-intakes", pendingIntakesRoutes);
 app.use("/api/billing", billingRoutes);
+app.use("/api/audit-logs", auditLogRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ message: "Endpoint not found" });
