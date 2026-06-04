@@ -47,6 +47,10 @@ model Patient {
   gender         String        @default("other")
   phone          String        @default("")
   address        String        @default("")
+  nextOfKinName  String        @default("")
+  nextOfKinPhone String        @default("")
+  nextOfKinRelationship String @default("")
+  nextOfKinAddress String      @default("")
   isDeleted      Boolean       @default(false)
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
@@ -81,6 +85,10 @@ model PendingIntake {
   phone          String    @default("")
   email          String    @default("")
   address        String    @default("")
+  nextOfKinName  String    @default("")
+  nextOfKinPhone String    @default("")
+  nextOfKinRelationship String @default("")
+  nextOfKinAddress String    @default("")
   preferredDate  DateTime?
   preferredTime  String    @default("")
   status         String    @default("pending") // pending, approved, rejected

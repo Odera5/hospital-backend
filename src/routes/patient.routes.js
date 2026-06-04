@@ -57,19 +57,28 @@ const normalizeTeeth = (value) => {
 
   if (!Array.isArray(parsed)) return [];
 
+  const allowed = ["present", "carious", "tender", "mobile", "fractured", "missing"];
+
   return parsed
-    .map((tooth) => ({
-      number: Number(tooth?.number),
-      condition:
-        typeof tooth?.condition === "string" ? tooth.condition : "present",
-    }))
-    .filter(
-      (tooth) =>
-        Number.isFinite(tooth.number) &&
-        ["present", "carious", "tender", "mobile", "fractured", "missing"].includes(
-          tooth.condition,
-        ),
-    );
+    .map((tooth) => {
+      const number = Number(tooth?.number);
+      let conditions = [];
+
+      if (Array.isArray(tooth?.conditions)) {
+        conditions = tooth.conditions.filter((c) => allowed.includes(c));
+      } else if (typeof tooth?.condition === "string" && allowed.includes(tooth.condition)) {
+        conditions = [tooth.condition];
+      }
+
+      const primaryCondition = conditions[0] || "present";
+
+      return {
+        number,
+        conditions,
+        condition: primaryCondition,
+      };
+    })
+    .filter((tooth) => Number.isFinite(tooth.number));
 };
 
 const normalizeAttachments = (attachments) =>
@@ -672,6 +681,10 @@ router.post(
       const phone = normalizeText(req.body?.phone);
       const address = normalizeText(req.body?.address);
       const email = normalizeText(req.body?.email);
+      const nextOfKinName = normalizeText(req.body?.nextOfKinName);
+      const nextOfKinPhone = normalizeText(req.body?.nextOfKinPhone);
+      const nextOfKinRelationship = normalizeText(req.body?.nextOfKinRelationship);
+      const nextOfKinAddress = normalizeText(req.body?.nextOfKinAddress);
 
       if (!name || !age) {
         return res.status(400).json({ message: "Name and age are required" });
@@ -687,6 +700,10 @@ router.post(
           phone,
           address,
           email,
+          nextOfKinName,
+          nextOfKinPhone,
+          nextOfKinRelationship,
+          nextOfKinAddress,
         },
       });
 
@@ -844,6 +861,10 @@ router.put(
         phone: updates.phone,
         address: updates.address,
         email: updates.email,
+        nextOfKinName: updates.nextOfKinName,
+        nextOfKinPhone: updates.nextOfKinPhone,
+        nextOfKinRelationship: updates.nextOfKinRelationship,
+        nextOfKinAddress: updates.nextOfKinAddress,
       });
       const patientSearchIndexData = buildPatientSearchIndexData({
         name: updates.name,

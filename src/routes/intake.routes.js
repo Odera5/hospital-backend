@@ -251,6 +251,10 @@ router.post("/:clinicId", intakeLimiter, validatePublicIntake, async (req, res) 
     const phone = normalizeText(req.body?.phone);
     const address = normalizeText(req.body?.address);
     const email = normalizeText(req.body?.email);
+    const nextOfKinName = normalizeText(req.body?.nextOfKinName);
+    const nextOfKinPhone = normalizeText(req.body?.nextOfKinPhone);
+    const nextOfKinRelationship = normalizeText(req.body?.nextOfKinRelationship);
+    const nextOfKinAddress = normalizeText(req.body?.nextOfKinAddress);
     const preferredDate = req.body?.preferredDate ? new Date(req.body.preferredDate) : null;
     const preferredTime = normalizeText(req.body?.preferredTime);
 
@@ -291,6 +295,10 @@ router.post("/:clinicId", intakeLimiter, validatePublicIntake, async (req, res) 
         phone,
         email,
         address,
+        nextOfKinName,
+        nextOfKinPhone,
+        nextOfKinRelationship,
+        nextOfKinAddress,
         preferredDate,
         preferredTime,
         status: "pending"

@@ -62,6 +62,10 @@ export function toEncryptedPatientData(data = {}) {
     gender: normalizePatientString(data.gender, "other") || "other",
     phone: normalizePatientString(data.phone),
     address: normalizePatientString(data.address),
+    nextOfKinName: normalizePatientString(data.nextOfKinName),
+    nextOfKinPhone: normalizePatientString(data.nextOfKinPhone),
+    nextOfKinRelationship: normalizePatientString(data.nextOfKinRelationship),
+    nextOfKinAddress: normalizePatientString(data.nextOfKinAddress),
   };
 }
 
@@ -93,6 +97,10 @@ export function toDecryptedPatient(patient) {
     gender: patient.gender || "other",
     phone: patient.phone || "",
     address: patient.address || "",
+    nextOfKinName: patient.nextOfKinName || "",
+    nextOfKinPhone: patient.nextOfKinPhone || "",
+    nextOfKinRelationship: patient.nextOfKinRelationship || "",
+    nextOfKinAddress: patient.nextOfKinAddress || "",
     isDeleted: Boolean(patient.isDeleted),
   };
 }
