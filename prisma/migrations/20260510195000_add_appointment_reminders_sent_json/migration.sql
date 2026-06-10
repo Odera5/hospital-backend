@@ -1,2 +1,2 @@
 ALTER TABLE "Appointment"
-ADD COLUMN "remindersSent" JSONB NOT NULL DEFAULT '[]';
+ADD COLUMN IF NOT EXISTS "remindersSent" JSONB NOT NULL DEFAULT '[]';

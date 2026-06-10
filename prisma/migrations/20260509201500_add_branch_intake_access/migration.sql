@@ -1,8 +1,8 @@
 ALTER TABLE "Branch"
-ADD COLUMN "intakeEnabled" BOOLEAN NOT NULL DEFAULT false,
-ADD COLUMN "intakePublicToken" TEXT;
+ADD COLUMN IF NOT EXISTS "intakeEnabled" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN IF NOT EXISTS "intakePublicToken" TEXT;
 
-CREATE UNIQUE INDEX "Branch_intakePublicToken_key" ON "Branch"("intakePublicToken");
+CREATE UNIQUE INDEX IF NOT EXISTS "Branch_intakePublicToken_key" ON "Branch"("intakePublicToken");
 
 UPDATE "Branch" b
 SET

@@ -24,7 +24,8 @@ const router = express.Router();
 router.use(protect);
 router.use(enforceSubscriptionState({ allowAdminReadOnly: true }));
 
-const normalizeText = (value) => (typeof value === "string" ? value.trim() : "");
+const normalizeText = (value) =>
+  typeof value === "string" ? value.trim() : "";
 
 const isCardNumberMatch = (cardNumberStr, searchStr) => {
   if (!cardNumberStr || !searchStr) return false;
@@ -37,7 +38,9 @@ const isCardNumberMatch = (cardNumberStr, searchStr) => {
   const searchDigitsMatch = cleanSearch.match(/^(?:p-?|P-?)?(\d+)$/i);
 
   if (cardDigitsMatch && searchDigitsMatch) {
-    return parseInt(cardDigitsMatch[1], 10) === parseInt(searchDigitsMatch[1], 10);
+    return (
+      parseInt(cardDigitsMatch[1], 10) === parseInt(searchDigitsMatch[1], 10)
+    );
   }
 
   return false;
@@ -57,7 +60,14 @@ const normalizeTeeth = (value) => {
 
   if (!Array.isArray(parsed)) return [];
 
-  const allowed = ["present", "carious", "tender", "mobile", "fractured", "missing"];
+  const allowed = [
+    "present",
+    "carious",
+    "tender",
+    "mobile",
+    "fractured",
+    "missing",
+  ];
 
   return parsed
     .map((tooth) => {
@@ -66,7 +76,10 @@ const normalizeTeeth = (value) => {
 
       if (Array.isArray(tooth?.conditions)) {
         conditions = tooth.conditions.filter((c) => allowed.includes(c));
-      } else if (typeof tooth?.condition === "string" && allowed.includes(tooth.condition)) {
+      } else if (
+        typeof tooth?.condition === "string" &&
+        allowed.includes(tooth.condition)
+      ) {
         conditions = [tooth.condition];
       }
 
@@ -79,6 +92,11 @@ const normalizeTeeth = (value) => {
       };
     })
     .filter((tooth) => Number.isFinite(tooth.number));
+};
+
+const normalizeDentition = (value) => {
+  const dentitions = ["adult", "child", "mixed"];
+  return dentitions.includes(value) ? value : "adult";
 };
 
 const normalizeAttachments = (attachments) =>
@@ -177,10 +195,17 @@ const buildAttachmentUrl = (patientId, fileName) =>
   `/api/patients/${patientId}/records/attachments/${encodeURIComponent(fileName)}`;
 
 const getStoredAttachmentName = (file) =>
-  path.basename(String(file?.key || file?.filename || file?.originalname || ""));
+  path.basename(
+    String(file?.key || file?.filename || file?.originalname || ""),
+  );
 
 const getLegacyRecordFilePath = (fileName) =>
-  path.join(process.cwd(), "uploads", "records", path.basename(String(fileName || "")));
+  path.join(
+    process.cwd(),
+    "uploads",
+    "records",
+    path.basename(String(fileName || "")),
+  );
 
 const buildExaminationSummary = ({
   examination,
@@ -372,10 +397,15 @@ router.get(
       const clinicId = req.user.clinicId;
       const branchId = req.user.branchId;
       const search = normalizeText(req.query.search).toLowerCase();
-      const isGlobal = req.query.global === "true" && req.user.clinic?.plan === "ENTERPRISE";
+      const isGlobal =
+        req.query.global === "true" && req.user.clinic?.plan === "ENTERPRISE";
       const limit = Math.min(parsePositiveInteger(req.query.limit, 20), 100);
 
-      const baseWhere = { clinicId, isDeleted: false, ...(isGlobal ? {} : { branchId }) };
+      const baseWhere = {
+        clinicId,
+        isDeleted: false,
+        ...(isGlobal ? {} : { branchId }),
+      };
       const selectedFields = {
         id: true,
         name: true,
@@ -413,9 +443,14 @@ router.get(
         .filter((patient) => {
           if (!search || canUseIndexedSearch) return true;
 
-          const hasNameMatch = patient?.name && String(patient.name).toLowerCase().includes(search);
-          const hasPhoneMatch = patient?.phone && String(patient.phone).toLowerCase().includes(search);
-          const hasAgeMatch = patient?.age && String(patient.age).toLowerCase().includes(search);
+          const hasNameMatch =
+            patient?.name &&
+            String(patient.name).toLowerCase().includes(search);
+          const hasPhoneMatch =
+            patient?.phone &&
+            String(patient.phone).toLowerCase().includes(search);
+          const hasAgeMatch =
+            patient?.age && String(patient.age).toLowerCase().includes(search);
           const hasCardMatch = isCardNumberMatch(patient?.cardNumber, search);
 
           return hasNameMatch || hasPhoneMatch || hasAgeMatch || hasCardMatch;
@@ -452,8 +487,13 @@ router.get(
       const shouldPaginate =
         pageParam !== undefined || limitParam !== undefined;
 
-      const isGlobal = req.query.global === "true" && req.user.clinic?.plan === "ENTERPRISE";
-      const baseWhere = { clinicId, isDeleted: false, ...(isGlobal ? {} : { branchId }) };
+      const isGlobal =
+        req.query.global === "true" && req.user.clinic?.plan === "ENTERPRISE";
+      const baseWhere = {
+        clinicId,
+        isDeleted: false,
+        ...(isGlobal ? {} : { branchId }),
+      };
 
       if (!shouldPaginate) {
         const patients = await prisma.patient.findMany({
@@ -468,8 +508,7 @@ router.get(
       const limit = Math.min(parsePositiveInteger(limitParam, 25), 100);
       const skip = (page - 1) * limit;
       const requiresIndexedSearchOrSort =
-        Boolean(search) ||
-        ["name", "age", "cardNumber"].includes(sortBy);
+        Boolean(search) || ["name", "age", "cardNumber"].includes(sortBy);
       const canUseIndexedSearchOrSort =
         !requiresIndexedSearchOrSort ||
         !(await clinicHasPendingPatientSearchBackfill(clinicId));
@@ -512,8 +551,11 @@ router.get(
         .filter((patient) => {
           if (!search) return true;
 
-          const hasNameMatch = patient?.name && String(patient.name).toLowerCase().includes(search);
-          const hasAgeMatch = patient?.age && String(patient.age).toLowerCase().includes(search);
+          const hasNameMatch =
+            patient?.name &&
+            String(patient.name).toLowerCase().includes(search);
+          const hasAgeMatch =
+            patient?.age && String(patient.age).toLowerCase().includes(search);
           const hasCardMatch = isCardNumberMatch(patient?.cardNumber, search);
 
           return hasNameMatch || hasAgeMatch || hasCardMatch;
@@ -545,115 +587,113 @@ router.get(
   },
 );
 
-router.get(
-  "/trash/all",
-  protect,
-  authorizeRoles("admin"),
-  async (req, res) => {
-    try {
-      const clinicId = req.user.clinicId;
-      const branchId = req.user.branchId;
-      const pageParam = req.query.page;
-      const limitParam = req.query.limit;
-      const search = normalizeText(req.query.search).toLowerCase();
-      const requestedSortBy = normalizeText(req.query.sortBy);
-      const sortBy = VALID_TRASH_SORT_FIELDS.has(requestedSortBy)
-        ? requestedSortBy
-        : "updatedAt";
-      const sortDirection = normalizeSortDirection(
-        req.query.sortDirection,
-        "desc",
-      );
-      const shouldPaginate =
-        pageParam !== undefined || limitParam !== undefined;
-      const isGlobal = req.query.global === "true" && req.user.clinic?.plan === "ENTERPRISE";
-      const baseWhere = { clinicId, isDeleted: true, ...(isGlobal ? {} : { branchId }) };
+router.get("/trash/all", protect, authorizeRoles("admin"), async (req, res) => {
+  try {
+    const clinicId = req.user.clinicId;
+    const branchId = req.user.branchId;
+    const pageParam = req.query.page;
+    const limitParam = req.query.limit;
+    const search = normalizeText(req.query.search).toLowerCase();
+    const requestedSortBy = normalizeText(req.query.sortBy);
+    const sortBy = VALID_TRASH_SORT_FIELDS.has(requestedSortBy)
+      ? requestedSortBy
+      : "updatedAt";
+    const sortDirection = normalizeSortDirection(
+      req.query.sortDirection,
+      "desc",
+    );
+    const shouldPaginate = pageParam !== undefined || limitParam !== undefined;
+    const isGlobal =
+      req.query.global === "true" && req.user.clinic?.plan === "ENTERPRISE";
+    const baseWhere = {
+      clinicId,
+      isDeleted: true,
+      ...(isGlobal ? {} : { branchId }),
+    };
 
-      if (!shouldPaginate) {
-        const trash = await prisma.patient.findMany({
-          where: baseWhere,
-          orderBy: { updatedAt: "desc" },
-        });
-
-        return res.json(trash.map(toDecryptedPatient));
-      }
-
-      const page = parsePositiveInteger(pageParam, 1);
-      const limit = Math.min(parsePositiveInteger(limitParam, 25), 100);
-      const skip = (page - 1) * limit;
-      const requiresIndexedSearchOrSort =
-        Boolean(search) ||
-        ["name", "age", "cardNumber"].includes(sortBy);
-      const canUseIndexedSearchOrSort =
-        !requiresIndexedSearchOrSort ||
-        !(await clinicHasPendingPatientSearchBackfill(clinicId));
-
-      if (canUseIndexedSearchOrSort) {
-        const [trash, total] = await Promise.all([
-          prisma.patient.findMany({
-            where: {
-              ...baseWhere,
-              ...buildPatientSearchWhere(search),
-            },
-            orderBy: buildPatientSortOrder(sortBy, sortDirection),
-            skip,
-            take: limit,
-          }),
-          prisma.patient.count({
-            where: {
-              ...baseWhere,
-              ...buildPatientSearchWhere(search),
-            },
-          }),
-        ]);
-
-        return res.json({
-          data: trash.map(toDecryptedPatient),
-          page,
-          limit,
-          total,
-          totalPages: Math.max(1, Math.ceil(total / limit)),
-        });
-      }
-
+    if (!shouldPaginate) {
       const trash = await prisma.patient.findMany({
         where: baseWhere,
         orderBy: { updatedAt: "desc" },
       });
 
-      const filteredPatients = trash
-        .map(toDecryptedPatient)
-        .filter((patient) => {
-          if (!search) return true;
+      return res.json(trash.map(toDecryptedPatient));
+    }
 
-          const hasNameMatch = patient?.name && String(patient.name).toLowerCase().includes(search);
-          const hasAgeMatch = patient?.age && String(patient.age).toLowerCase().includes(search);
-          const hasCardMatch = isCardNumberMatch(patient?.cardNumber, search);
+    const page = parsePositiveInteger(pageParam, 1);
+    const limit = Math.min(parsePositiveInteger(limitParam, 25), 100);
+    const skip = (page - 1) * limit;
+    const requiresIndexedSearchOrSort =
+      Boolean(search) || ["name", "age", "cardNumber"].includes(sortBy);
+    const canUseIndexedSearchOrSort =
+      !requiresIndexedSearchOrSort ||
+      !(await clinicHasPendingPatientSearchBackfill(clinicId));
 
-          return hasNameMatch || hasAgeMatch || hasCardMatch;
-        });
-
-      const sortedPatients = sortPatientsCollection(
-        filteredPatients,
-        sortBy,
-        sortDirection,
-      );
-      const total = sortedPatients.length;
-      const paginatedPatients = sortedPatients.slice(skip, skip + limit);
+    if (canUseIndexedSearchOrSort) {
+      const [trash, total] = await Promise.all([
+        prisma.patient.findMany({
+          where: {
+            ...baseWhere,
+            ...buildPatientSearchWhere(search),
+          },
+          orderBy: buildPatientSortOrder(sortBy, sortDirection),
+          skip,
+          take: limit,
+        }),
+        prisma.patient.count({
+          where: {
+            ...baseWhere,
+            ...buildPatientSearchWhere(search),
+          },
+        }),
+      ]);
 
       return res.json({
-        data: paginatedPatients,
+        data: trash.map(toDecryptedPatient),
         page,
         limit,
         total,
         totalPages: Math.max(1, Math.ceil(total / limit)),
       });
-    } catch (error) {
-      console.error("Get trash error:", error);
-      res.status(500).json({ message: "Failed to fetch trash" });
     }
-  },
-);
+
+    const trash = await prisma.patient.findMany({
+      where: baseWhere,
+      orderBy: { updatedAt: "desc" },
+    });
+
+    const filteredPatients = trash.map(toDecryptedPatient).filter((patient) => {
+      if (!search) return true;
+
+      const hasNameMatch =
+        patient?.name && String(patient.name).toLowerCase().includes(search);
+      const hasAgeMatch =
+        patient?.age && String(patient.age).toLowerCase().includes(search);
+      const hasCardMatch = isCardNumberMatch(patient?.cardNumber, search);
+
+      return hasNameMatch || hasAgeMatch || hasCardMatch;
+    });
+
+    const sortedPatients = sortPatientsCollection(
+      filteredPatients,
+      sortBy,
+      sortDirection,
+    );
+    const total = sortedPatients.length;
+    const paginatedPatients = sortedPatients.slice(skip, skip + limit);
+
+    return res.json({
+      data: paginatedPatients,
+      page,
+      limit,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    });
+  } catch (error) {
+    console.error("Get trash error:", error);
+    res.status(500).json({ message: "Failed to fetch trash" });
+  }
+});
 
 router.get(
   "/:id",
@@ -661,8 +701,13 @@ router.get(
   authorizeRoles("admin", "branch_manager", "doctor", "nurse"),
   async (req, res) => {
     try {
-      const patient = await getPatientOr404(req.params.id, req.user.clinicId, req.user.branchId);
-      if (!patient) return res.status(404).json({ message: "Patient not found" });
+      const patient = await getPatientOr404(
+        req.params.id,
+        req.user.clinicId,
+        req.user.branchId,
+      );
+      if (!patient)
+        return res.status(404).json({ message: "Patient not found" });
 
       res.json(toDecryptedPatient(patient));
     } catch (error) {
@@ -687,7 +732,9 @@ router.post(
       const email = normalizeText(req.body?.email);
       const nextOfKinName = normalizeText(req.body?.nextOfKinName);
       const nextOfKinPhone = normalizeText(req.body?.nextOfKinPhone);
-      const nextOfKinRelationship = normalizeText(req.body?.nextOfKinRelationship);
+      const nextOfKinRelationship = normalizeText(
+        req.body?.nextOfKinRelationship,
+      );
       const nextOfKinAddress = normalizeText(req.body?.nextOfKinAddress);
 
       if (!name || !age) {
@@ -716,7 +763,9 @@ router.post(
       console.error("Create patient error:", error);
 
       if (error instanceof Prisma.PrismaClientValidationError) {
-        return res.status(400).json({ message: "Invalid patient data submitted" });
+        return res
+          .status(400)
+          .json({ message: "Invalid patient data submitted" });
       }
 
       if (error instanceof Prisma.PrismaClientKnownRequestError) {
@@ -752,7 +801,7 @@ router.post(
   async (req, res) => {
     try {
       const { patients } = req.body;
-      
+
       if (!Array.isArray(patients) || patients.length === 0) {
         return res.status(400).json({ message: "No patients data provided" });
       }
@@ -786,24 +835,26 @@ router.post(
       if (validationErrors.length > 0) {
         const displayErrors = validationErrors.slice(0, 5).join("; ");
         const moreCount = validationErrors.length - 5;
-        const errorMessage = `Validation failed. ${displayErrors}${moreCount > 0 ? `... and ${moreCount} more errors` : ''}. Please fix your CSV and try again.`;
+        const errorMessage = `Validation failed. ${displayErrors}${moreCount > 0 ? `... and ${moreCount} more errors` : ""}. Please fix your CSV and try again.`;
         return res.status(400).json({ message: errorMessage });
       }
 
       if (validPatientsData.length === 0) {
-        return res.status(400).json({ message: "No valid patient data found to import." });
+        return res
+          .status(400)
+          .json({ message: "No valid patient data found to import." });
       }
 
       let aggregate = await prisma.patient.aggregate({
         where: { clinicId: req.user.clinicId },
         _max: { cardNumberSequence: true },
       });
-      
+
       let nextSequence = (aggregate._max.cardNumberSequence || 0) + 1;
 
       const newPatients = validPatientsData.map((p) => {
         const currentSeq = nextSequence++;
-        
+
         return {
           clinicId: req.user.clinicId,
           branchId: req.user.branchId,
@@ -821,7 +872,7 @@ router.post(
             address: p.address,
             email: p.email,
             cardNumber: formatCardNumber(currentSeq),
-          })
+          }),
         };
       });
 
@@ -830,15 +881,15 @@ router.post(
         skipDuplicates: true,
       });
 
-      res.status(201).json({ 
-        message: "Patients imported successfully", 
-        count: created.count 
+      res.status(201).json({
+        message: "Patients imported successfully",
+        count: created.count,
       });
     } catch (error) {
       console.error("Import patients error:", error);
       res.status(500).json({ message: "Failed to bulk import patients" });
     }
-  }
+  },
 );
 
 router.put(
@@ -848,7 +899,11 @@ router.put(
   validatePatient,
   async (req, res) => {
     try {
-      const existingPatient = await getPatientOr404(req.params.id, req.user.clinicId, req.user.branchId);
+      const existingPatient = await getPatientOr404(
+        req.params.id,
+        req.user.clinicId,
+        req.user.branchId,
+      );
       if (!existingPatient) {
         return res.status(404).json({ message: "Patient not found" });
       }
@@ -902,8 +957,13 @@ router.delete(
   authorizeRoles("admin", "branch_manager", "doctor", "nurse"),
   async (req, res) => {
     try {
-      const patient = await getPatientOr404(req.params.id, req.user.clinicId, req.user.branchId);
-      if (!patient) return res.status(404).json({ message: "Patient not found" });
+      const patient = await getPatientOr404(
+        req.params.id,
+        req.user.clinicId,
+        req.user.branchId,
+      );
+      if (!patient)
+        return res.status(404).json({ message: "Patient not found" });
 
       const updatedPatient = await prisma.patient.update({
         where: { id: patient.id },
@@ -965,12 +1025,17 @@ router.delete(
       const patient = await prisma.patient.findUnique({
         where: { id: req.params.id },
       });
-      if (!patient || patient.clinicId !== req.user.clinicId || patient.branchId !== req.user.branchId) {
+      if (
+        !patient ||
+        patient.clinicId !== req.user.clinicId ||
+        patient.branchId !== req.user.branchId
+      ) {
         return res.status(404).json({ message: "Patient not found" });
       }
       if (!patient.isDeleted) {
         return res.status(400).json({
-          message: "Only patients already moved to Trash can be permanently deleted",
+          message:
+            "Only patients already moved to Trash can be permanently deleted",
         });
       }
 
@@ -990,8 +1055,13 @@ router.post(
   upload.array("attachments"),
   async (req, res) => {
     try {
-      const patient = await getPatientOr404(req.params.id, req.user.clinicId, req.user.branchId);
-      if (!patient) return res.status(404).json({ message: "Patient not found" });
+      const patient = await getPatientOr404(
+        req.params.id,
+        req.user.clinicId,
+        req.user.branchId,
+      );
+      if (!patient)
+        return res.status(404).json({ message: "Patient not found" });
 
       const {
         presentingComplaint,
@@ -1073,7 +1143,7 @@ router.post(
           comorbidities: comorbidities || "",
           currentMedication: currentMedication || "",
           ...normalizedConsent,
-          dentition: dentition === "child" ? "child" : "adult",
+          dentition: normalizeDentition(dentition),
           teeth: normalizeTeeth(teeth),
           vitals: normalizeVitals(vitals),
           attachments,
@@ -1109,8 +1179,13 @@ router.put(
   upload.array("attachments"),
   async (req, res) => {
     try {
-      const patient = await getPatientOr404(req.params.id, req.user.clinicId, req.user.branchId);
-      if (!patient) return res.status(404).json({ message: "Patient not found" });
+      const patient = await getPatientOr404(
+        req.params.id,
+        req.user.clinicId,
+        req.user.branchId,
+      );
+      if (!patient)
+        return res.status(404).json({ message: "Patient not found" });
 
       const record = await prisma.record.findUnique({
         where: { id: req.params.recordId },
@@ -1155,11 +1230,13 @@ router.put(
       });
 
       const existingAttachments = normalizeAttachments(record.attachments);
-      const removedNames = (removedAttachments
-        ? Array.isArray(removedAttachments)
-          ? removedAttachments
-          : [removedAttachments]
-        : [])
+      const removedNames = (
+        removedAttachments
+          ? Array.isArray(removedAttachments)
+            ? removedAttachments
+            : [removedAttachments]
+          : []
+      )
         .map((name) => path.basename(String(name || "")))
         .filter(Boolean);
 
@@ -1222,7 +1299,7 @@ router.put(
           comorbidities: comorbidities || "",
           currentMedication: currentMedication || "",
           ...normalizedConsent,
-          dentition: dentition === "child" ? "child" : "adult",
+          dentition: normalizeDentition(dentition),
           teeth: normalizeTeeth(teeth),
           vitals: normalizeVitals(vitals),
           attachments: [...retainedAttachments, ...newAttachments],
@@ -1245,7 +1322,9 @@ router.put(
       res.json(serializeRecord(updatedRecord));
     } catch (error) {
       console.error("Update record error:", error);
-      res.status(500).json({ message: error.message || "Failed to update record" });
+      res
+        .status(500)
+        .json({ message: error.message || "Failed to update record" });
     }
   },
 );
@@ -1256,8 +1335,13 @@ router.get(
   authorizeRoles("admin", "branch_manager", "doctor", "nurse"),
   async (req, res) => {
     try {
-      const patient = await getPatientOr404(req.params.id, req.user.clinicId, req.user.branchId);
-      if (!patient) return res.status(404).json({ message: "Patient not found" });
+      const patient = await getPatientOr404(
+        req.params.id,
+        req.user.clinicId,
+        req.user.branchId,
+      );
+      if (!patient)
+        return res.status(404).json({ message: "Patient not found" });
 
       const fileName = path.basename(req.params.filename);
       const candidateRecords = await prisma.record.findMany({
@@ -1299,8 +1383,13 @@ router.get(
   authorizeRoles("admin", "branch_manager", "doctor", "nurse"),
   async (req, res) => {
     try {
-      const patient = await getPatientOr404(req.params.id, req.user.clinicId, req.user.branchId);
-      if (!patient) return res.status(404).json({ message: "Patient not found" });
+      const patient = await getPatientOr404(
+        req.params.id,
+        req.user.clinicId,
+        req.user.branchId,
+      );
+      if (!patient)
+        return res.status(404).json({ message: "Patient not found" });
 
       const isTrash = req.query.trash === "true";
       const page = parsePositiveInteger(req.query.page, 1);
@@ -1338,7 +1427,7 @@ router.get(
               ],
             }
           : {}),
-        ...((startDate || endDate)
+        ...(startDate || endDate
           ? {
               createdAt: {
                 ...(startDate
@@ -1393,8 +1482,13 @@ router.delete(
   authorizeRoles("admin", "branch_manager", "doctor"),
   async (req, res) => {
     try {
-      const patient = await getPatientOr404(req.params.id, req.user.clinicId, req.user.branchId);
-      if (!patient) return res.status(404).json({ message: "Patient not found" });
+      const patient = await getPatientOr404(
+        req.params.id,
+        req.user.clinicId,
+        req.user.branchId,
+      );
+      if (!patient)
+        return res.status(404).json({ message: "Patient not found" });
 
       const record = await prisma.record.findUnique({
         where: { id: req.params.recordId },
@@ -1408,7 +1502,7 @@ router.delete(
 
       await prisma.record.update({
         where: { id: record.id },
-        data: { isDeleted: true, deletedAt: new Date() }
+        data: { isDeleted: true, deletedAt: new Date() },
       });
 
       res.json({ message: "Record moved to Trash" });
@@ -1425,20 +1519,27 @@ router.patch(
   authorizeRoles("admin", "branch_manager", "doctor"),
   async (req, res) => {
     try {
-      const patient = await getPatientOr404(req.params.id, req.user.clinicId, req.user.branchId);
-      if (!patient) return res.status(404).json({ message: "Patient not found" });
+      const patient = await getPatientOr404(
+        req.params.id,
+        req.user.clinicId,
+        req.user.branchId,
+      );
+      if (!patient)
+        return res.status(404).json({ message: "Patient not found" });
 
       const record = await prisma.record.findUnique({
         where: { id: req.params.recordId },
       });
 
       if (!record || record.patientId !== patient.id) {
-        return res.status(404).json({ message: "Record not found for this patient" });
+        return res
+          .status(404)
+          .json({ message: "Record not found for this patient" });
       }
 
       const updatedRecord = await prisma.record.update({
         where: { id: req.params.recordId },
-        data: { isDeleted: false, deletedAt: null }
+        data: { isDeleted: false, deletedAt: null },
       });
 
       res.json(serializeRecord(updatedRecord));
@@ -1446,7 +1547,7 @@ router.patch(
       console.error("Restore record error:", error);
       res.status(500).json({ message: "Server error" });
     }
-  }
+  },
 );
 
 router.delete(
@@ -1455,19 +1556,30 @@ router.delete(
   authorizeRoles("admin", "branch_manager", "doctor"),
   async (req, res) => {
     try {
-      const patient = await getPatientOr404(req.params.id, req.user.clinicId, req.user.branchId);
-      if (!patient) return res.status(404).json({ message: "Patient not found" });
+      const patient = await getPatientOr404(
+        req.params.id,
+        req.user.clinicId,
+        req.user.branchId,
+      );
+      if (!patient)
+        return res.status(404).json({ message: "Patient not found" });
 
       const record = await prisma.record.findUnique({
         where: { id: req.params.recordId },
       });
 
       if (!record || record.patientId !== patient.id) {
-        return res.status(404).json({ message: "Record not found for this patient" });
+        return res
+          .status(404)
+          .json({ message: "Record not found for this patient" });
       }
-      
+
       if (!record.isDeleted) {
-        return res.status(400).json({ message: "Record must be in trash to be permanently deleted" });
+        return res
+          .status(400)
+          .json({
+            message: "Record must be in trash to be permanently deleted",
+          });
       }
 
       for (const attachment of normalizeAttachments(record.attachments)) {
@@ -1498,7 +1610,7 @@ router.delete(
       console.error("Hard delete record error:", error);
       res.status(500).json({ message: "Failed to delete record" });
     }
-  }
+  },
 );
 
 export default router;
