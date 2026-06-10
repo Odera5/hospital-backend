@@ -160,10 +160,11 @@ app.use((err, req, res, next) => {
     return res.status(403).json({ message: "Origin is not allowed" });
   }
 
-  const payload =
-    process.env.NODE_ENV === "production"
-      ? { message: "Server error" }
-      : { message: "Server error", error: err.message };
+  const payload = {
+    message: "Server error",
+    error: err?.message || String(err),
+    ...(process.env.NODE_ENV !== "production" ? { stack: err?.stack } : {}),
+  };
 
   res.status(500).json(payload);
 });
