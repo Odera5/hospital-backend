@@ -22,9 +22,17 @@ import { handlePaystackWebhook } from "./controllers/billingController.js";
 import { prisma } from "./lib/prisma.js";
 
 const app = express();
+const isProduction = process.env.NODE_ENV === "production";
+const shouldTrustProxy = String(process.env.TRUST_PROXY || "")
+  .trim()
+  .toLowerCase();
+if (isProduction || shouldTrustProxy === "true") {
+  app.set("trust proxy", 1);
+}
 
-const allowedOrigins = (process.env.CORS_ORIGIN ||
-  "http://localhost:5173,http://localhost:5174")
+const allowedOrigins = (
+  process.env.CORS_ORIGIN || "http://localhost:5173,http://localhost:5174"
+)
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
