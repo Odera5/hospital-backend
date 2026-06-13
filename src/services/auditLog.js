@@ -13,7 +13,21 @@ export const logAuditEvent = async (req, details) => {
         resourceId: details.resourceId ? String(details.resourceId) : "",
         patientId: details.patientId || null,
         metadata: details.metadata || {},
-        ipAddress: req.ip || "",
+        ipAddress: (() => {
+          let ip = req.headers["x-forwarded-for"] || req.socket?.remoteAddress || req.ip || "";
+          if (ip) {
+            if (ip.includes(",")) {
+              ip = ip.split(",")[0].trim();
+            }
+            if (ip.startsWith("::ffff:")) {
+              ip = ip.substring(7);
+            }
+            if (ip === "::1") {
+              ip = "127.0.0.1";
+            }
+          }
+          return ip;
+        })(),
       },
     });
   } catch (error) {
