@@ -128,7 +128,7 @@ router.get(
       const called = getWaitingCount("called");
       const inConsultation = getWaitingCount("in_consultation");
       const completed = getWaitingCount("completed");
-      const activeWaiting = waiting + called;
+      const activeWaiting = waiting + called + inConsultation;
 
       return res.json({
         patients: {
