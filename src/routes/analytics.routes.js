@@ -51,7 +51,9 @@ router.get("/dashboard", protect, authorizeRoles("admin", "branch_manager", "doc
     let invoiceDateFilter = { ...dateFilter };
     if (!startDate && !endDate) {
       const sixMonthsAgo = new Date();
-      sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+      sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 5); // 6 months total including current
+      sixMonthsAgo.setDate(1);
+      sixMonthsAgo.setHours(0, 0, 0, 0);
       invoiceDateFilter = { gte: sixMonthsAgo };
     }
 
@@ -67,20 +69,52 @@ router.get("/dashboard", protect, authorizeRoles("admin", "branch_manager", "doc
       }
     });
 
-    // Aggregate monthly revenue manually (SQLite/Postgres differences make group-by-date tricky in Prisma)
+    // Determine the date bounds for the dynamic chart aggregation
+    let aggStart;
+    let aggEnd;
+
+    if (startDate) {
+      aggStart = new Date(startDate);
+    } else {
+      aggStart = new Date();
+      aggStart.setMonth(aggStart.getMonth() - 5);
+      aggStart.setDate(1);
+      aggStart.setHours(0, 0, 0, 0);
+    }
+
+    if (endDate) {
+      aggEnd = new Date(endDate);
+    } else {
+      aggEnd = new Date();
+    }
+
+    // Ensure aggStart is before aggEnd
+    if (aggStart > aggEnd) {
+      const temp = aggStart;
+      aggStart = aggEnd;
+      aggEnd = temp;
+    }
+
+    // Generate monthly keys between aggStart and aggEnd (limit to max 36 months)
+    const months = [];
+    let current = new Date(aggStart);
+    current.setDate(1); // Avoid month overflow issues (e.g. Feb 31st logic)
+    const limit = new Date(aggEnd);
+    
+    let iterations = 0;
+    while (current <= limit && iterations < 36) {
+      const monthLabel = current.toLocaleString('default', { month: 'short', year: '2-digit' });
+      months.push(monthLabel);
+      current.setMonth(current.getMonth() + 1);
+      iterations++;
+    }
+
+    // Aggregate monthly revenue manually using dynamic month-year keys
     const revenueByMonthMap = {};
     invoices.forEach(inv => {
-      const month = inv.invoiceDate.toLocaleString('default', { month: 'short' });
-      revenueByMonthMap[month] = (revenueByMonthMap[month] || 0) + inv.total;
+      const monthLabel = inv.invoiceDate.toLocaleString('default', { month: 'short', year: '2-digit' });
+      revenueByMonthMap[monthLabel] = (revenueByMonthMap[monthLabel] || 0) + inv.total;
     });
-    
-    // Sort logic to ensure past 6 months are ordered correctly
-    const months = [];
-    for (let i = 5; i >= 0; i--) {
-        const d = new Date();
-        d.setMonth(d.getMonth() - i);
-        months.push(d.toLocaleString('default', { month: 'short' }));
-    }
 
     const revenueByMonth = months.map(m => ({
         month: m,
