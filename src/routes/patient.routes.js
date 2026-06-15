@@ -415,18 +415,14 @@ router.get(
         createdAt: true,
       };
 
-      const shouldSearch = Boolean(search);
-      const canUseIndexedSearch = !shouldSearch
-        ? true
-        : !(await clinicHasPendingPatientSearchBackfill(clinicId));
       const rawPatients = await prisma.patient.findMany({
         where: {
           ...baseWhere,
-          ...(canUseIndexedSearch ? buildPatientSearchWhere(search) : {}),
+          ...buildPatientSearchWhere(search),
         },
         select: selectedFields,
         orderBy: { createdAt: "desc" },
-        ...(!shouldSearch || canUseIndexedSearch ? { take: limit } : {}),
+        take: limit,
       });
 
       const options = rawPatients
@@ -439,21 +435,6 @@ router.get(
             phone: decrypted.phone,
             age: decrypted.age,
           };
-        })
-        .filter((patient) => {
-          if (!search || canUseIndexedSearch) return true;
-
-          const hasNameMatch =
-            patient?.name &&
-            String(patient.name).toLowerCase().includes(search);
-          const hasPhoneMatch =
-            patient?.phone &&
-            String(patient.phone).toLowerCase().includes(search);
-          const hasAgeMatch =
-            patient?.age && String(patient.age).toLowerCase().includes(search);
-          const hasCardMatch = isCardNumberMatch(patient?.cardNumber, search);
-
-          return hasNameMatch || hasPhoneMatch || hasAgeMatch || hasCardMatch;
         })
         .slice(0, limit);
 
