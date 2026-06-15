@@ -876,7 +876,7 @@ router.post(
 router.put(
   "/:id",
   protect,
-  authorizeRoles("admin", "branch_manager", "doctor"),
+  authorizeRoles("admin", "branch_manager", "doctor", "nurse"),
   validatePatient,
   async (req, res) => {
     try {
