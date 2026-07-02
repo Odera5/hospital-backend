@@ -2,13 +2,14 @@ import { prisma } from "../lib/prisma.js";
 
 export const deleteExpiredTrashedPatients = async () => {
   try {
-    const threeMinutesAgo = new Date(Date.now() - 3 * 60 * 1000);
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
     const expiredPatients = await prisma.patient.findMany({
       where: {
         isDeleted: true,
         updatedAt: {
-          lte: threeMinutesAgo,
+          lte: sixMonthsAgo,
         },
       },
       select: {
@@ -27,7 +28,7 @@ export const deleteExpiredTrashedPatients = async () => {
         },
       });
 
-      console.log(`Automatically permanently deleted ${result.count} patients from trash (older than 3 minutes).`);
+      console.log(`Automatically permanently deleted ${result.count} patients from trash (older than 6 months).`);
     }
   } catch (error) {
     console.error("Failed to delete expired trashed patients:", error);
@@ -40,10 +41,10 @@ export const startTrashCleanupWorker = () => {
   // Run once immediately on start
   deleteExpiredTrashedPatients();
 
-  // Run every minute while testing the trash expiry window
+  // Run every 12 hours (12 * 60 * 60 * 1000 ms)
   cleanupIntervalId = setInterval(() => {
     deleteExpiredTrashedPatients();
-  }, 60 * 1000);
+  }, 12 * 60 * 60 * 1000);
 
   console.log("Trash cleanup worker started.");
 };
