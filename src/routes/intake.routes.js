@@ -2,6 +2,7 @@ import express from "express";
 import rateLimit from "express-rate-limit";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
+import { logAuditEvent } from "../services/auditLog.js";
 import { toEncryptedPatientData } from "../utils/patientCrypto.js";
 import { SLOT_MINUTES, listAvailableSlots } from "../utils/appointmentScheduling.js";
 import {
@@ -303,6 +304,16 @@ router.post("/:clinicId", intakeLimiter, validatePublicIntake, async (req, res) 
         preferredTime,
         status: "pending"
       }
+    });
+
+    await logAuditEvent(req, {
+      action: "pending_intake.create",
+      resourceType: "pending_intake",
+      resourceId: pendingIntake.id,
+      metadata: {
+        preferredDate,
+        preferredTime,
+      },
     });
 
     res.status(201).json({ message: "Intake form submitted successfully. Your request is pending approval." });

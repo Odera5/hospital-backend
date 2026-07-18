@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { prisma } from "../lib/prisma.js";
+import { logAuditEvent } from "../services/auditLog.js";
 import { serializeAppointment } from "../utils/serializers.js";
 import { toDecryptedPatient } from "../utils/patientCrypto.js";
 import {
@@ -507,6 +508,18 @@ export const createAppointment = async (req, res) => {
       }
     }
 
+    await logAuditEvent(req, {
+      action: "appointment.create",
+      resourceType: "appointment",
+      resourceId: appointment.id,
+      patientId: appointment.patientId,
+      metadata: {
+        appointmentDate: appointment.appointmentDate,
+        timeSlot: appointment.timeSlot,
+        appointmentType: appointment.appointmentType,
+      },
+    });
+
     res.status(201).json(
       serializeAppointment({
         ...appointment,
@@ -710,6 +723,16 @@ export const updateAppointment = async (req, res) => {
       },
     });
 
+    await logAuditEvent(req, {
+      action: "appointment.update",
+      resourceType: "appointment",
+      resourceId: updatedAppointment.id,
+      patientId: updatedAppointment.patientId,
+      metadata: {
+        updatedFields: Object.keys(req.body),
+      },
+    });
+
     res.json(
       serializeAppointment({
         ...updatedAppointment,
@@ -740,6 +763,17 @@ export const deleteAppointment = async (req, res) => {
 
     await prisma.appointment.delete({
       where: { id: appointment.id },
+    });
+
+    await logAuditEvent(req, {
+      action: "appointment.delete",
+      resourceType: "appointment",
+      resourceId: appointment.id,
+      patientId: appointment.patientId,
+      metadata: {
+        appointmentDate: appointment.appointmentDate,
+        timeSlot: appointment.timeSlot,
+      },
     });
 
     res.json({ message: "Appointment cancelled" });
@@ -911,6 +945,17 @@ export const respondToAppointment = async (req, res) => {
         dentist: {
           select: dentistSelect,
         },
+      },
+    });
+
+    await logAuditEvent(req, {
+      action: "appointment.update",
+      resourceType: "appointment",
+      resourceId: updatedAppointment.id,
+      patientId: updatedAppointment.patientId,
+      metadata: {
+        patientResponse: nextConfirmationStatus,
+        action,
       },
     });
 

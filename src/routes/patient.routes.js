@@ -676,6 +676,109 @@ router.get("/trash/all", protect, authorizeRoles("admin"), async (req, res) => {
   }
 });
 
+// PUT /api/patients/trash/restore - Bulk restore patients from trash
+router.put(
+  "/trash/restore",
+  protect,
+  authorizeRoles("admin"),
+  async (req, res) => {
+    try {
+      const { ids } = req.body;
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ message: "No patient IDs provided" });
+      }
+
+      const patientsToRestore = await prisma.patient.findMany({
+        where: {
+          id: { in: ids },
+          clinicId: req.user.clinicId,
+          isDeleted: true,
+        },
+      });
+
+      if (patientsToRestore.length === 0) {
+        return res.status(404).json({ message: "No matching trashed patients found" });
+      }
+
+      const restoredIds = patientsToRestore.map((p) => p.id);
+
+      await prisma.patient.updateMany({
+        where: { id: { in: restoredIds } },
+        data: { isDeleted: false },
+      });
+
+      for (const p of patientsToRestore) {
+        await logAuditEvent(req, {
+          action: "patient.update",
+          resourceType: "patient",
+          resourceId: p.id,
+          patientId: p.id,
+          metadata: { restored: true, bulk: true },
+        });
+      }
+
+      res.json({
+        message: `${restoredIds.length} patient(s) restored successfully`,
+        restoredIds,
+      });
+    } catch (error) {
+      console.error("Bulk restore error:", error);
+      res.status(500).json({ message: "Failed to restore patients" });
+    }
+  }
+);
+
+// DELETE /api/patients/trash/permanent - Bulk permanently delete patients
+router.delete(
+  "/trash/permanent",
+  protect,
+  authorizeRoles("admin"),
+  async (req, res) => {
+    try {
+      const { ids } = req.body;
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ message: "No patient IDs provided" });
+      }
+
+      const patientsToDelete = await prisma.patient.findMany({
+        where: {
+          id: { in: ids },
+          clinicId: req.user.clinicId,
+          isDeleted: true,
+        },
+      });
+
+      if (patientsToDelete.length === 0) {
+        return res.status(404).json({ message: "No matching trashed patients found" });
+      }
+
+      const deleteIds = patientsToDelete.map((p) => p.id);
+
+      await prisma.patient.deleteMany({
+        where: { id: { in: deleteIds } },
+      });
+
+      for (const p of patientsToDelete) {
+        await logAuditEvent(req, {
+          action: "patient.delete",
+          resourceType: "patient",
+          resourceId: p.id,
+          patientId: p.id,
+          metadata: { permanent: true, bulk: true },
+        });
+      }
+
+      res.json({
+        message: `${deleteIds.length} patient(s) permanently deleted successfully`,
+        deleteIds,
+      });
+    } catch (error) {
+      console.error("Bulk permanent delete error:", error);
+      res.status(500).json({ message: "Failed to permanently delete patients" });
+    }
+  }
+);
+
 router.get(
   "/:id",
   protect,
@@ -736,6 +839,17 @@ router.post(
           nextOfKinPhone,
           nextOfKinRelationship,
           nextOfKinAddress,
+        },
+      });
+
+      await logAuditEvent(req, {
+        action: "patient.create",
+        resourceType: "patient",
+        resourceId: patient.id,
+        patientId: patient.id,
+        metadata: {
+          gender: patient.gender,
+          age: patient.age,
         },
       });
 
@@ -862,6 +976,15 @@ router.post(
         skipDuplicates: true,
       });
 
+      await logAuditEvent(req, {
+        action: "patient.create",
+        resourceType: "patient",
+        resourceId: "bulk_import",
+        metadata: {
+          importedCount: created.count,
+        },
+      });
+
       res.status(201).json({
         message: "Patients imported successfully",
         count: created.count,
@@ -924,6 +1047,16 @@ router.put(
         },
       });
 
+      await logAuditEvent(req, {
+        action: "patient.update",
+        resourceType: "patient",
+        resourceId: patient.id,
+        patientId: patient.id,
+        metadata: {
+          updatedFields: Object.keys(req.body),
+        },
+      });
+
       res.json(toDecryptedPatient(patient));
     } catch (error) {
       console.error("Update patient error:", error);
@@ -949,6 +1082,14 @@ router.delete(
       const updatedPatient = await prisma.patient.update({
         where: { id: patient.id },
         data: { isDeleted: true },
+      });
+
+      await logAuditEvent(req, {
+        action: "patient.delete",
+        resourceType: "patient",
+        resourceId: patient.id,
+        patientId: patient.id,
+        metadata: { softDelete: true },
       });
 
       res.json({
@@ -986,6 +1127,14 @@ router.put(
         data: { isDeleted: false },
       });
 
+      await logAuditEvent(req, {
+        action: "patient.update",
+        resourceType: "patient",
+        resourceId: restoredPatient.id,
+        patientId: restoredPatient.id,
+        metadata: { restored: true },
+      });
+
       res.json({
         message: "Patient restored successfully",
         patient: toDecryptedPatient(restoredPatient),
@@ -1021,6 +1170,15 @@ router.delete(
       }
 
       await prisma.patient.delete({ where: { id: req.params.id } });
+
+      await logAuditEvent(req, {
+        action: "patient.delete",
+        resourceType: "patient",
+        resourceId: patient.id,
+        patientId: patient.id,
+        metadata: { permanent: true },
+      });
+
       res.json({ message: "Patient permanently deleted" });
     } catch (error) {
       console.error("Permanent delete error:", error);
@@ -1486,6 +1644,14 @@ router.delete(
         data: { isDeleted: true, deletedAt: new Date() },
       });
 
+      await logAuditEvent(req, {
+        action: "record.delete",
+        resourceType: "record",
+        resourceId: record.id,
+        patientId: patient.id,
+        metadata: { softDelete: true },
+      });
+
       res.json({ message: "Record moved to Trash" });
     } catch (error) {
       console.error("Soft delete record error:", error);
@@ -1521,6 +1687,14 @@ router.patch(
       const updatedRecord = await prisma.record.update({
         where: { id: req.params.recordId },
         data: { isDeleted: false, deletedAt: null },
+      });
+
+      await logAuditEvent(req, {
+        action: "record.update",
+        resourceType: "record",
+        resourceId: updatedRecord.id,
+        patientId: patient.id,
+        metadata: { restored: true },
       });
 
       res.json(serializeRecord(updatedRecord));

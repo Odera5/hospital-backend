@@ -1,4 +1,5 @@
 import { prisma } from "../lib/prisma.js";
+import { logAuditEvent } from "../services/auditLog.js";
 import {
   disablePaystackSubscription,
   generatePaystackManageLink,
@@ -177,6 +178,15 @@ export const cancelPaystackSubscription = async (req, res) => {
       where: { id: clinic.id },
       data: {
         paystackSubscriptionStatus: "non-renewing",
+      },
+    });
+
+    await logAuditEvent(req, {
+      action: "billing.subscription_cancelled",
+      resourceType: "billing",
+      resourceId: clinic.id,
+      metadata: {
+        status: "non-renewing",
       },
     });
 

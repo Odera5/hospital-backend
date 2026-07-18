@@ -1,5 +1,6 @@
 import express from "express";
 import { prisma } from "../lib/prisma.js";
+import { logAuditEvent } from "../services/auditLog.js";
 import { protect, authorizeRoles } from "../middleware/authorize.js";
 import { validateBranchPayload } from "../middleware/validators.js";
 import { hasEnterpriseAccess } from "../utils/subscriptionAccess.js";
@@ -132,6 +133,16 @@ router.post("/", authorizeRoles("admin"), validateBranchPayload, async (req, res
       },
     });
 
+    await logAuditEvent(req, {
+      action: "branch.create",
+      resourceType: "branch",
+      resourceId: branch.id,
+      metadata: {
+        name: branch.name,
+        city: branch.city,
+      },
+    });
+
     res.status(201).json({
       message: "Branch created successfully",
       branch: serializeBranch(branch),
@@ -197,6 +208,15 @@ router.put("/:id", authorizeRoles("admin"), validateBranchPayload, async (req, r
       },
     });
 
+    await logAuditEvent(req, {
+      action: "branch.update",
+      resourceType: "branch",
+      resourceId: branch.id,
+      metadata: {
+        updatedFields: Object.keys(req.body),
+      },
+    });
+
     res.json({
       message: "Branch updated successfully",
       branch: serializeBranch(branch),
@@ -235,6 +255,15 @@ router.patch("/:id/status", authorizeRoles("admin"), async (req, res) => {
       where: { id: existingBranch.id },
       data: {
         isActive: Boolean(req.body?.isActive),
+      },
+    });
+
+    await logAuditEvent(req, {
+      action: "branch.update",
+      resourceType: "branch",
+      resourceId: branch.id,
+      metadata: {
+        isActive: branch.isActive,
       },
     });
 

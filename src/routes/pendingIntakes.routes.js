@@ -2,6 +2,7 @@ import express from "express";
 import { Prisma } from "@prisma/client";
 import crypto from "crypto";
 import { prisma } from "../lib/prisma.js";
+import { logAuditEvent } from "../services/auditLog.js";
 import { protect, authorizeRoles } from "../middleware/authorize.js";
 import { enforceSubscriptionState } from "../middleware/subscriptionStateGuard.js";
 import { toEncryptedPatientData } from "../utils/patientCrypto.js";
@@ -310,6 +311,16 @@ router.post("/:id/approve", protect, authorizeRoles("admin", "branch_manager", "
       throw new Error("Failed to approve intake request.");
     }
 
+    await logAuditEvent(req, {
+      action: "pending_intake.approve",
+      resourceType: "pending_intake",
+      resourceId: id,
+      metadata: {
+        patientId: result.patient.id,
+        appointmentCreated: !!result.appointment,
+      },
+    });
+
     res.status(200).json({
       message: "Patient registered successfully",
       patient: result.patient,
@@ -341,6 +352,15 @@ router.delete("/:id", protect, authorizeRoles("admin", "branch_manager", "doctor
     await prisma.pendingIntake.update({
       where: { id },
       data: { status: "rejected" }
+    });
+
+    await logAuditEvent(req, {
+      action: "pending_intake.reject",
+      resourceType: "pending_intake",
+      resourceId: id,
+      metadata: {
+        status: "rejected",
+      },
     });
 
     res.status(200).json({ message: "Intake request rejected successfully" });

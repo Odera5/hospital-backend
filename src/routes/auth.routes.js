@@ -2,6 +2,7 @@ import express from "express";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import { prisma } from "../lib/prisma.js";
+import { logAuditEvent } from "../services/auditLog.js";
 import { protect, authorizeRoles } from "../middleware/authorize.js";
 import { generateAccessToken, generateRefreshToken } from "../utils/jwt.js";
 import {
@@ -482,6 +483,15 @@ router.put(
         },
       });
 
+      await logAuditEvent(req, {
+        action: "clinic_settings.update",
+        resourceType: "clinic_settings",
+        resourceId: clinic.id,
+        metadata: {
+          updatedFields: Object.keys(req.body),
+        },
+      });
+
       res.json({
         message: "Clinic profile updated successfully",
         clinic: serializeClinic(clinic),
@@ -548,6 +558,16 @@ router.put(
           },
         });
 
+        await logAuditEvent(req, {
+          action: "clinic_settings.update",
+          resourceType: "clinic_settings",
+          resourceId: existingClinic.id,
+          metadata: {
+            intakeEnabled: branch.intakeEnabled,
+            branchId: branch.id,
+          },
+        });
+
         return res.json({
           message: requestedEnabled
             ? "Patient intake link enabled successfully for this branch"
@@ -570,6 +590,15 @@ router.put(
           data: {
             intakeEnabled: requestedEnabled,
             intakePublicToken,
+          },
+        });
+
+        await logAuditEvent(req, {
+          action: "clinic_settings.update",
+          resourceType: "clinic_settings",
+          resourceId: clinic.id,
+          metadata: {
+            intakeEnabled: clinic.intakeEnabled,
           },
         });
 
@@ -1066,6 +1095,16 @@ router.post(
         });
       }
 
+      await logAuditEvent(req, {
+        action: "user.create",
+        resourceType: "user",
+        resourceId: newUser.id,
+        metadata: {
+          role: newUser.role,
+          email: newUser.email,
+        },
+      });
+
       res.status(201).json({
         user: serializeUser(newUser),
         message:
@@ -1170,6 +1209,15 @@ router.patch(
         include: { clinic: true },
       });
 
+      await logAuditEvent(req, {
+        action: "user.update",
+        resourceType: "user",
+        resourceId: updatedUser.id,
+        metadata: {
+          updatedFields: ["assignedBranchIds"],
+        },
+      });
+
       res.json({
         message: "Staff branch assignments updated successfully.",
         user: serializeUser(updatedUser),
@@ -1236,6 +1284,15 @@ router.patch(
         include: { clinic: true },
       });
 
+      await logAuditEvent(req, {
+        action: "user.update",
+        resourceType: "user",
+        resourceId: updatedUser.id,
+        metadata: {
+          isActive: updatedUser.isActive,
+        },
+      });
+
       res.json({
         message: isActive
           ? "Staff account activated"
@@ -1292,6 +1349,15 @@ router.delete(
 
       await prisma.user.delete({
         where: { id: existingUser.id },
+      });
+
+      await logAuditEvent(req, {
+        action: "user.delete",
+        resourceType: "user",
+        resourceId: existingUser.id,
+        metadata: {
+          email: existingUser.email,
+        },
       });
 
       res.json({ message: "Staff account deleted successfully" });
