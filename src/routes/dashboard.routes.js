@@ -2,10 +2,12 @@ import express from "express";
 import { prisma } from "../lib/prisma.js";
 import { protect, authorizeRoles } from "../middleware/authorize.js";
 import { enforceSubscriptionState } from "../middleware/subscriptionStateGuard.js";
+import { autoUpdateOverdueInvoices } from "../controllers/invoiceController.js";
 
 const router = express.Router();
 router.use(protect);
 router.use(enforceSubscriptionState({ allowAdminReadOnly: true }));
+router.use(autoUpdateOverdueInvoices);
 
 const getDayBounds = (value = new Date()) => {
   const start = new Date(value);

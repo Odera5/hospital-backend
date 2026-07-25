@@ -63,6 +63,28 @@ const getInvoiceStatus = ({ status, total, amountPaid, dueDate }) => {
   return "issued";
 };
 
+export const autoUpdateOverdueInvoices = async (req, res, next) => {
+  try {
+    await prisma.invoice.updateMany({
+      where: {
+        status: "issued",
+        dueDate: {
+          lt: new Date(),
+        },
+        balance: {
+          gt: 0,
+        },
+      },
+      data: {
+        status: "overdue",
+      },
+    });
+  } catch (error) {
+    console.error("Auto update overdue invoices error:", error.message);
+  }
+  next();
+};
+
 const generateInvoiceNumber = async () => {
   const year = new Date().getFullYear();
 
@@ -122,7 +144,11 @@ export const getAllInvoices = async (req, res) => {
         { branchId: null, patient: { branchId: req.user.branchId } }
       ],
       ...(patientId ? { patientId } : {}),
-      ...(status === "unpaid" ? { status: { in: ["issued", "overdue"] } } : status ? { status } : {}),
+      ...(status === "unpaid"
+        ? { status: { in: ["issued", "overdue"] }, amountPaid: 0 }
+        : status === "incomplete"
+        ? { status: { in: ["issued", "overdue"] }, amountPaid: { gt: 0 }, balance: { gt: 0 } }
+        : status ? { status } : {}),
       ...((startDate || endDate)
         ? {
             invoiceDate: {
@@ -314,7 +340,7 @@ export const updateInvoice = async (req, res) => {
       });
     }
 
-    const nextStatus = status
+    let nextStatus = status
       ? status
       : getInvoiceStatus({
           status: invoice.status,
@@ -322,6 +348,15 @@ export const updateInvoice = async (req, res) => {
           amountPaid: nextAmountPaid,
           dueDate: dueDate !== undefined ? dueDate : invoice.dueDate,
         });
+
+    if (nextStatus === "issued") {
+      nextStatus = getInvoiceStatus({
+        status: "issued",
+        total,
+        amountPaid: nextAmountPaid,
+        dueDate: dueDate !== undefined ? dueDate : invoice.dueDate,
+      });
+    }
 
     const updatedInvoice = await prisma.invoice.update({
       where: { id: invoice.id },
@@ -374,10 +409,17 @@ export const issueInvoice = async (req, res) => {
       return res.status(404).json({ message: "Invoice not found" });
     }
 
+    const nextStatus = getInvoiceStatus({
+      status: "issued",
+      total: invoice.total,
+      amountPaid: invoice.amountPaid,
+      dueDate: invoice.dueDate,
+    });
+
     const updatedInvoice = await prisma.invoice.update({
       where: { id: invoice.id },
       data: {
-        status: "issued",
+        status: nextStatus,
         invoiceDate: new Date(),
       },
       include: invoiceInclude,
@@ -507,7 +549,7 @@ export const getInvoiceReport = async (req, res) => {
     const dueTodayEnd = new Date();
     dueTodayEnd.setHours(23, 59, 59, 999);
 
-    const [invoiceAggregate, statusGroups, draftCount, dueTodayCount, outstandingPatients] = await Promise.all([
+    const [invoiceAggregate, statusGroups, draftCount, dueTodayCount, unpaidPatients, incompletePatients] = await Promise.all([
       prisma.invoice.aggregate({
         where: invoiceWhere,
         _count: { _all: true },
@@ -558,7 +600,22 @@ export const getInvoiceReport = async (req, res) => {
             { branchId: null, patient: { branchId: req.user.branchId } }
           ],
           ...(patientId ? { patientId } : {}),
-          status: { not: "cancelled" },
+          status: { notIn: ["draft", "cancelled"] },
+          amountPaid: 0,
+          balance: { gt: 0 },
+        },
+      }),
+      prisma.invoice.groupBy({
+        by: ["patientId"],
+        where: {
+          patient: { clinicId: req.user.clinicId },
+          OR: [
+            { branchId: req.user.branchId },
+            { branchId: null, patient: { branchId: req.user.branchId } }
+          ],
+          ...(patientId ? { patientId } : {}),
+          status: { notIn: ["draft", "cancelled"] },
+          amountPaid: { gt: 0 },
           balance: { gt: 0 },
         },
       }),
@@ -574,7 +631,8 @@ export const getInvoiceReport = async (req, res) => {
       totalOutstanding: invoiceAggregate._sum.balance || 0,
       paidInvoices: getStatusCount("paid"),
       overdueInvoices: getStatusCount("overdue"),
-      outstandingPatients: outstandingPatients.length,
+      unpaidPatients: unpaidPatients.length,
+      incompletePatients: incompletePatients.length,
       dueToday: dueTodayCount,
       drafts: draftCount,
     };

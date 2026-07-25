@@ -11,6 +11,7 @@ import {
   recordPayment,
   getInvoiceReport,
   getInvoicePatients,
+  autoUpdateOverdueInvoices,
 } from "../controllers/invoiceController.js";
 import { validateInvoice } from "../middleware/validators.js";
 
@@ -18,6 +19,7 @@ const router = express.Router();
 
 router.use(verifyToken);
 router.use(enforceSubscriptionState({ allowAdminReadOnly: true }));
+router.use(autoUpdateOverdueInvoices);
 
 router.get("/", getAllInvoices);
 router.get("/report", getInvoiceReport);
@@ -45,6 +47,10 @@ router.delete("/:id", async (req, res) => {
       invoice.patient?.branchId !== req.user.branchId
     ) {
       return res.status(404).json({ message: "Invoice not found" });
+    }
+
+    if (invoice.amountPaid > 0) {
+      return res.status(400).json({ message: "Cannot cancel an invoice with payments recorded" });
     }
 
     await prisma.invoice.update({

@@ -3,10 +3,12 @@ import { prisma } from "../lib/prisma.js";
 import { protect, authorizeRoles } from "../middleware/authorize.js";
 import { requireProOrEnterprise } from "../middleware/subscriptionGuard.js";
 import { enforceSubscriptionState } from "../middleware/subscriptionStateGuard.js";
+import { autoUpdateOverdueInvoices } from "../controllers/invoiceController.js";
 
 const router = express.Router();
 router.use(protect);
 router.use(enforceSubscriptionState({ allowAdminReadOnly: true }));
+router.use(autoUpdateOverdueInvoices);
 
 router.get("/dashboard", protect, authorizeRoles("admin", "branch_manager", "doctor"), requireProOrEnterprise, async (req, res) => {
   try {
@@ -60,11 +62,11 @@ router.get("/dashboard", protect, authorizeRoles("admin", "branch_manager", "doc
     const invoices = await prisma.invoice.findMany({
       where: {
         patient: { clinicId, branchId },
-        status: "paid",
+        status: { notIn: ["draft", "cancelled"] },
         ...(Object.keys(invoiceDateFilter).length > 0 && { invoiceDate: invoiceDateFilter })
       },
       select: {
-         total: true,
+         amountPaid: true,
          invoiceDate: true
       }
     });
@@ -113,7 +115,7 @@ router.get("/dashboard", protect, authorizeRoles("admin", "branch_manager", "doc
     const revenueByMonthMap = {};
     invoices.forEach(inv => {
       const monthLabel = inv.invoiceDate.toLocaleString('default', { month: 'short', year: '2-digit' });
-      revenueByMonthMap[monthLabel] = (revenueByMonthMap[monthLabel] || 0) + inv.total;
+      revenueByMonthMap[monthLabel] = (revenueByMonthMap[monthLabel] || 0) + inv.amountPaid;
     });
 
     const revenueByMonth = months.map(m => ({
@@ -192,17 +194,17 @@ router.get("/dashboard", protect, authorizeRoles("admin", "branch_manager", "doc
       const crossInvoices = await prisma.invoice.findMany({
         where: {
           patient: { clinicId },
-          status: "paid",
+          status: { notIn: ["draft", "cancelled"] },
           ...(Object.keys(invoiceDateFilter).length > 0 && { invoiceDate: invoiceDateFilter })
         },
-        select: { branchId: true, total: true }
+        select: { branchId: true, amountPaid: true }
       });
 
       const branchRevenue = {};
       crossInvoices.forEach(inv => {
         const bId = inv.branchId;
         if (bId) {
-           branchRevenue[bId] = (branchRevenue[bId] || 0) + inv.total;
+           branchRevenue[bId] = (branchRevenue[bId] || 0) + inv.amountPaid;
         }
       });
 
