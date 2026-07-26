@@ -6,6 +6,7 @@ import {
   serializeBranch,
   STAFF_BRANCH_ACCESS_MESSAGE,
 } from "../utils/branchAccess.js";
+import { hasEnterpriseAccess } from "../utils/subscriptionAccess.js";
 
 export const protect = async (req, res, next) => {
   try {
@@ -90,15 +91,19 @@ export const protect = async (req, res, next) => {
     }
 
     if (branches.length > 0) {
-      const { activeBranch } = resolveActiveBranch(branches, requestedBranchId);
+      const primaryBranch = branches.find((b) => b.isPrimary) || branches[0];
+      const hasEnterprise = hasEnterpriseAccess(user.clinic);
+      const targetBranchId = hasEnterprise ? requestedBranchId : (primaryBranch?.id || "");
 
-      if (requestedBranchId && !activeBranch) {
+      const { activeBranch } = resolveActiveBranch(branches, targetBranchId);
+
+      if (targetBranchId && !activeBranch) {
         return res.status(403).json({
           message: "The selected branch is not available for this staff account.",
         });
       }
 
-      user.branchId = activeBranch.id;
+      user.branchId = activeBranch?.id || null;
       user.branch = serializeBranch(activeBranch);
       user.availableBranches = branches.map(serializeBranch);
     }
