@@ -480,11 +480,15 @@ export const syncClinicWithTransaction = async (transaction) => {
   return updatedClinic;
 };
 
-export const verifyPaystackTransaction = async (reference) => {
-  const transaction = await callPaystack(
+export const fetchPaystackTransaction = async (reference) => {
+  return callPaystack(
     `/transaction/verify/${encodeURIComponent(reference)}`,
     { method: "GET" },
   );
+};
+
+export const verifyPaystackTransaction = async (reference) => {
+  const transaction = await fetchPaystackTransaction(reference);
 
   if (transaction.status !== "success") {
     const error = new Error(
@@ -597,4 +601,110 @@ export const fetchCustomerSubscriptions = async (customerCode) => {
   return callPaystack(`/subscription?customer=${encodeURIComponent(customerCode)}`, {
     method: "GET",
   });
+};
+
+export const fetchPaystackCustomer = async (emailOrCode) => {
+  return callPaystack(`/customer/${encodeURIComponent(emailOrCode)}`, {
+    method: "GET",
+  });
+};
+
+const usableSubscriptionStatuses = ["active", "non-renewing", "attention"];
+
+const subscriptionMatchesClinicPlan = (subscription, clinic) => {
+  if (!clinic.paystackPlanCode) {
+    return true;
+  }
+
+  return subscription?.plan?.plan_code === clinic.paystackPlanCode;
+};
+
+const chooseRecoverableSubscription = (subscriptions, clinic) => {
+  const candidates = (Array.isArray(subscriptions) ? subscriptions : [])
+    .filter((subscription) => subscription?.subscription_code && subscription?.email_token);
+
+  return candidates.find((subscription) =>
+    usableSubscriptionStatuses.includes(String(subscription.status || "").toLowerCase()) &&
+    subscriptionMatchesClinicPlan(subscription, clinic)
+  ) || candidates.find((subscription) =>
+    usableSubscriptionStatuses.includes(String(subscription.status || "").toLowerCase())
+  ) || candidates[0] || null;
+};
+
+const applyRecoveredSubscription = async (clinic, subscription) => {
+  if (!subscription?.subscription_code || !subscription?.email_token) {
+    return clinic;
+  }
+
+  return prisma.clinic.update({
+    where: { id: clinic.id },
+    data: {
+      paystackSubscriptionCode: subscription.subscription_code,
+      paystackSubscriptionEmailToken: subscription.email_token,
+      paystackSubscriptionStatus: subscription.status || clinic.paystackSubscriptionStatus,
+      paystackNextPaymentDate: subscription.next_payment_date
+        ? new Date(subscription.next_payment_date)
+        : clinic.paystackNextPaymentDate,
+    },
+  });
+};
+
+const recoverableSubscriptionFromTransaction = (transaction) => {
+  const subscription = transaction?.subscription || {};
+
+  return {
+    subscription_code:
+      subscription.subscription_code || transaction?.subscription_code || null,
+    email_token: subscription.email_token || transaction?.email_token || null,
+    status: subscription.status || (transaction?.status === "success" ? "active" : null),
+    next_payment_date: subscription.next_payment_date || transaction?.next_payment_date || null,
+  };
+};
+
+export const recoverClinicPaystackSubscription = async (clinic) => {
+  let recoveredClinic = clinic;
+
+  if (recoveredClinic.paystackLastReference) {
+    try {
+      const transaction = await fetchPaystackTransaction(recoveredClinic.paystackLastReference);
+      recoveredClinic = await applyRecoveredSubscription(
+        recoveredClinic,
+        recoverableSubscriptionFromTransaction(transaction),
+      );
+    } catch (error) {
+      console.error("Failed to recover subscription from last Paystack reference:", error);
+    }
+  }
+
+  if (recoveredClinic.paystackSubscriptionCode && recoveredClinic.paystackSubscriptionEmailToken) {
+    return recoveredClinic;
+  }
+
+  const subscriptionSources = [];
+
+  if (recoveredClinic.paystackCustomerCode) {
+    try {
+      const customer = await fetchPaystackCustomer(recoveredClinic.paystackCustomerCode);
+      if (Array.isArray(customer?.subscriptions)) {
+        subscriptionSources.push(customer.subscriptions);
+      }
+
+      if (customer?.id) {
+        const subscriptions = await fetchCustomerSubscriptions(customer.id);
+        subscriptionSources.push(subscriptions);
+      }
+    } catch (error) {
+      console.error("Failed to recover subscription from Paystack customer:", error);
+    }
+  }
+
+  for (const subscriptions of subscriptionSources) {
+    const subscription = chooseRecoverableSubscription(subscriptions, recoveredClinic);
+    if (subscription) {
+      recoveredClinic = await applyRecoveredSubscription(recoveredClinic, subscription);
+      break;
+    }
+  }
+
+  return recoveredClinic;
 };
