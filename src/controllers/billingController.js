@@ -2,6 +2,7 @@ import { prisma } from "../lib/prisma.js";
 import { logAuditEvent } from "../services/auditLog.js";
 import {
   disablePaystackSubscription,
+  fetchCustomerSubscriptions,
   generatePaystackManageLink,
   initializePaystackSubscription,
   parseRequestedBillingInterval,
@@ -154,12 +155,40 @@ export const verifyPaystackCheckoutPublic = async (req, res) => {
 
 export const cancelPaystackSubscription = async (req, res) => {
   try {
-    const clinic = await prisma.clinic.findUnique({
+    let clinic = await prisma.clinic.findUnique({
       where: { id: req.user.clinicId },
     });
 
     if (!clinic) {
       return res.status(404).json({ message: "Clinic not found" });
+    }
+
+    if (!clinic.paystackSubscriptionCode || !clinic.paystackSubscriptionEmailToken) {
+      if (clinic.paystackCustomerCode) {
+        try {
+          const subscriptions = await fetchCustomerSubscriptions(clinic.paystackCustomerCode);
+          const activeSub = subscriptions?.find((sub) =>
+            ["active", "non-renewing", "attention"].includes(sub.status) &&
+            sub.plan?.plan_code === clinic.paystackPlanCode
+          ) || subscriptions?.[0];
+
+          if (activeSub) {
+            clinic = await prisma.clinic.update({
+              where: { id: clinic.id },
+              data: {
+                paystackSubscriptionCode: activeSub.subscription_code,
+                paystackSubscriptionEmailToken: activeSub.email_token,
+                paystackSubscriptionStatus: activeSub.status,
+                paystackNextPaymentDate: activeSub.next_payment_date
+                  ? new Date(activeSub.next_payment_date)
+                  : clinic.paystackNextPaymentDate,
+              },
+            });
+          }
+        } catch (fetchErr) {
+          console.error("Failed to recover subscription from Paystack:", fetchErr);
+        }
+      }
     }
 
     if (!clinic.paystackSubscriptionCode || !clinic.paystackSubscriptionEmailToken) {

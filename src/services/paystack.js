@@ -592,3 +592,9 @@ export const disablePaystackSubscription = async ({
     }),
   });
 };
+
+export const fetchCustomerSubscriptions = async (customerCode) => {
+  return callPaystack(`/subscription?customer=${encodeURIComponent(customerCode)}`, {
+    method: "GET",
+  });
+};
