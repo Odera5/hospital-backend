@@ -25,6 +25,11 @@ const PRO_PLAN_DESCRIPTION_ANNUAL =
   "PrimuxCare Pro annual subscription for clinics in Nigeria";
 const ANNUAL_INTERVAL = "annually";
 const DEFAULT_PRO_AMOUNT_KOBO_ANNUAL = 100000000;
+
+const ENTERPRISE_PLAN_NAME_ANNUAL = "PrimuxCare Enterprise Annual";
+const ENTERPRISE_PLAN_DESCRIPTION_ANNUAL =
+  "PrimuxCare Enterprise annual subscription for multi-branch clinics in Nigeria";
+const DEFAULT_ENTERPRISE_AMOUNT_KOBO_ANNUAL = 150000000;
 export const SUPPORTED_PLAN_TYPES = [PRO_PLAN_TYPE, ENTERPRISE_PLAN_TYPE];
 export const SUPPORTED_BILLING_INTERVALS = [
   MONTHLY_INTERVAL,
@@ -88,12 +93,18 @@ const getPlanConfig = (planType = PRO_PLAN_TYPE, interval = MONTHLY_INTERVAL) =>
   const normalizedInterval = parseRequestedBillingInterval(interval);
 
   if (normalizedPlanType === ENTERPRISE_PLAN_TYPE) {
-    if (normalizedInterval !== MONTHLY_INTERVAL) {
-      const error = new Error(
-        "Enterprise billing currently supports monthly subscriptions only.",
-      );
-      error.statusCode = 400;
-      throw error;
+    if (normalizedInterval === ANNUAL_INTERVAL) {
+      const configuredAmount = Number(process.env.PAYSTACK_ENTERPRISE_PLAN_AMOUNT_KOBO_ANNUAL);
+      return {
+        planType: ENTERPRISE_PLAN_TYPE,
+        name: ENTERPRISE_PLAN_NAME_ANNUAL,
+        description: ENTERPRISE_PLAN_DESCRIPTION_ANNUAL,
+        amount: Number.isFinite(configuredAmount) && configuredAmount > 0
+          ? Math.round(configuredAmount)
+          : DEFAULT_ENTERPRISE_AMOUNT_KOBO_ANNUAL,
+        interval: ANNUAL_INTERVAL,
+        envPlanCode: process.env.PAYSTACK_ENTERPRISE_PLAN_CODE_ANNUAL?.trim(),
+      };
     }
 
     const configuredAmount = Number(process.env.PAYSTACK_ENTERPRISE_PLAN_AMOUNT_KOBO);
@@ -263,6 +274,7 @@ export const serializeBillingClinic = (clinic) => ({
 
 const inferPlanTypeFromPlanDetails = (transaction) => {
   const envEnterprisePlanCode = process.env.PAYSTACK_ENTERPRISE_PLAN_CODE?.trim();
+  const envEnterprisePlanCodeAnnual = process.env.PAYSTACK_ENTERPRISE_PLAN_CODE_ANNUAL?.trim();
   const envProPlanCodeMonthly = process.env.PAYSTACK_PRO_PLAN_CODE?.trim();
   const envProPlanCodeAnnual = process.env.PAYSTACK_PRO_PLAN_CODE_ANNUAL?.trim();
   const planCode = String(
@@ -281,7 +293,10 @@ const inferPlanTypeFromPlanDetails = (transaction) => {
       transaction?.amount,
   );
 
-  if (envEnterprisePlanCode && planCode === envEnterprisePlanCode) {
+  if (
+    (envEnterprisePlanCode && planCode === envEnterprisePlanCode) ||
+    (envEnterprisePlanCodeAnnual && planCode === envEnterprisePlanCodeAnnual)
+  ) {
     return ENTERPRISE_PLAN_TYPE;
   }
 
@@ -300,7 +315,11 @@ const inferPlanTypeFromPlanDetails = (transaction) => {
     return PRO_PLAN_TYPE;
   }
 
-  if (Number.isFinite(amount) && amount === DEFAULT_ENTERPRISE_AMOUNT_KOBO) {
+  if (
+    Number.isFinite(amount) &&
+    (amount === DEFAULT_ENTERPRISE_AMOUNT_KOBO ||
+      amount === DEFAULT_ENTERPRISE_AMOUNT_KOBO_ANNUAL)
+  ) {
     return ENTERPRISE_PLAN_TYPE;
   }
 
