@@ -25,15 +25,40 @@ const buildPaystackVerificationResponse = ({ clinic, transaction, message }) => 
   },
 });
 
+const FINAL_PAYSTACK_SUBSCRIPTION_STATUSES = new Set([
+  "cancelled",
+  "canceled",
+  "completed",
+]);
+
+const getNormalizedSubscriptionStatus = (clinic) =>
+  String(clinic?.paystackSubscriptionStatus || "").toLowerCase();
+
+const isFinalPaystackSubscriptionStatus = (clinic) =>
+  FINAL_PAYSTACK_SUBSCRIPTION_STATUSES.has(getNormalizedSubscriptionStatus(clinic));
+
+const cannotResumeSubscriptionMessage =
+  "This Paystack subscription has already been cancelled and cannot be resumed. Start a new checkout to renew your plan.";
+
+const isCannotReactivatePaystackSubscriptionError = (error) => {
+  const message = String(error?.message || "").toLowerCase();
+  return message.includes("subscription") &&
+    (message.includes("cannot be reactivated") ||
+      message.includes("can not be reactivated") ||
+      message.includes("cancelled"));
+};
+
 export const getBillingOverview = async (req, res) => {
   try {
-    const clinic = await prisma.clinic.findUnique({
+    let clinic = await prisma.clinic.findUnique({
       where: { id: req.user.clinicId },
     });
 
     if (!clinic) {
       return res.status(404).json({ message: "Clinic not found" });
     }
+
+    clinic = await recoverClinicPaystackSubscription(clinic, { forceRefresh: true });
 
     return res.json({ clinic: serializeBillingClinic(clinic) });
   } catch (error) {
@@ -239,6 +264,13 @@ export const resumePaystackSubscription = async (req, res) => {
       });
     }
 
+    if (isFinalPaystackSubscriptionStatus(clinic)) {
+      return res.status(400).json({
+        message: cannotResumeSubscriptionMessage,
+        clinic: serializeBillingClinic(clinic),
+      });
+    }
+
     await enablePaystackSubscription({
       subscriptionCode: clinic.paystackSubscriptionCode,
       emailToken: clinic.paystackSubscriptionEmailToken,
@@ -266,6 +298,13 @@ export const resumePaystackSubscription = async (req, res) => {
     });
   } catch (error) {
     console.error("Resume Paystack subscription error:", error);
+
+    if (isCannotReactivatePaystackSubscriptionError(error)) {
+      return res.status(400).json({
+        message: cannotResumeSubscriptionMessage,
+      });
+    }
+
     return res.status(error.statusCode || 500).json({
       message: error.message || "Failed to resume Paystack subscription",
     });
