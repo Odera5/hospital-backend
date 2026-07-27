@@ -597,6 +597,12 @@ export const disablePaystackSubscription = async ({
   });
 };
 
+export const isInactivePaystackSubscriptionError = (error) => {
+  const message = String(error?.message || "").toLowerCase();
+  return message.includes("subscription") &&
+    (message.includes("already inactive") || message.includes("not found or already inactive"));
+};
+
 export const fetchCustomerSubscriptions = async (customerCode) => {
   return callPaystack(`/subscription?customer=${encodeURIComponent(customerCode)}`, {
     method: "GET",
@@ -661,7 +667,10 @@ const recoverableSubscriptionFromTransaction = (transaction) => {
   };
 };
 
-export const recoverClinicPaystackSubscription = async (clinic) => {
+export const recoverClinicPaystackSubscription = async (
+  clinic,
+  { forceRefresh = false } = {},
+) => {
   let recoveredClinic = clinic;
 
   if (recoveredClinic.paystackLastReference) {
@@ -676,15 +685,23 @@ export const recoverClinicPaystackSubscription = async (clinic) => {
     }
   }
 
-  if (recoveredClinic.paystackSubscriptionCode && recoveredClinic.paystackSubscriptionEmailToken) {
+  if (
+    !forceRefresh &&
+    recoveredClinic.paystackSubscriptionCode &&
+    recoveredClinic.paystackSubscriptionEmailToken
+  ) {
     return recoveredClinic;
   }
 
   const subscriptionSources = [];
+  const customerLookups = [
+    recoveredClinic.paystackCustomerCode,
+    recoveredClinic.email,
+  ].filter(Boolean);
 
-  if (recoveredClinic.paystackCustomerCode) {
+  for (const customerLookup of [...new Set(customerLookups)]) {
     try {
-      const customer = await fetchPaystackCustomer(recoveredClinic.paystackCustomerCode);
+      const customer = await fetchPaystackCustomer(customerLookup);
       if (Array.isArray(customer?.subscriptions)) {
         subscriptionSources.push(customer.subscriptions);
       }

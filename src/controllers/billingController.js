@@ -2,6 +2,7 @@ import { prisma } from "../lib/prisma.js";
 import { logAuditEvent } from "../services/auditLog.js";
 import {
   disablePaystackSubscription,
+  isInactivePaystackSubscriptionError,
   recoverClinicPaystackSubscription,
   generatePaystackManageLink,
   initializePaystackSubscription,
@@ -163,9 +164,7 @@ export const cancelPaystackSubscription = async (req, res) => {
       return res.status(404).json({ message: "Clinic not found" });
     }
 
-    if (!clinic.paystackSubscriptionCode || !clinic.paystackSubscriptionEmailToken) {
-      clinic = await recoverClinicPaystackSubscription(clinic);
-    }
+    clinic = await recoverClinicPaystackSubscription(clinic, { forceRefresh: true });
 
     if (!clinic.paystackSubscriptionCode || !clinic.paystackSubscriptionEmailToken) {
       return res.status(400).json({
@@ -174,10 +173,20 @@ export const cancelPaystackSubscription = async (req, res) => {
       });
     }
 
-    await disablePaystackSubscription({
-      subscriptionCode: clinic.paystackSubscriptionCode,
-      emailToken: clinic.paystackSubscriptionEmailToken,
-    });
+    let alreadyInactive = false;
+
+    try {
+      await disablePaystackSubscription({
+        subscriptionCode: clinic.paystackSubscriptionCode,
+        emailToken: clinic.paystackSubscriptionEmailToken,
+      });
+    } catch (error) {
+      if (!isInactivePaystackSubscriptionError(error)) {
+        throw error;
+      }
+
+      alreadyInactive = true;
+    }
 
     const updatedClinic = await prisma.clinic.update({
       where: { id: clinic.id },
@@ -192,12 +201,14 @@ export const cancelPaystackSubscription = async (req, res) => {
       resourceId: clinic.id,
       metadata: {
         status: "non-renewing",
+        alreadyInactive,
       },
     });
 
     return res.json({
-      message:
-        "Auto-renew has been disabled. This subscription will stay active until the current paid period ends.",
+      message: alreadyInactive
+        ? "Auto-renew was already disabled for this subscription."
+        : "Auto-renew has been disabled. This subscription will stay active until the current paid period ends.",
       clinic: serializeBillingClinic(updatedClinic),
     });
   } catch (error) {
