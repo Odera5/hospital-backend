@@ -47,6 +47,10 @@ const isCannotReactivatePaystackSubscriptionError = (error) => {
       message.includes("can not be reactivated") ||
       message.includes("cancelled"));
 };
+const getSubscriptionAuditScope = () => ({
+  actionPrefix: "upgrade_plan",
+  resourceType: "upgrade_plan",
+});
 
 export const getBillingOverview = async (req, res) => {
   try {
@@ -221,13 +225,17 @@ export const cancelPaystackSubscription = async (req, res) => {
       },
     });
 
+    const auditScope = getSubscriptionAuditScope(req);
+
     await logAuditEvent(req, {
-      action: "billing.subscription_cancelled",
-      resourceType: "billing",
+      action: `${auditScope.actionPrefix}.subscription_cancelled`,
+      resourceType: auditScope.resourceType,
       resourceId: clinic.id,
       metadata: {
         status: "non-renewing",
         alreadyInactive,
+        page: "upgrade",
+        previousPlan: clinic.plan,
       },
     });
 
@@ -283,12 +291,16 @@ export const resumePaystackSubscription = async (req, res) => {
       },
     });
 
+    const auditScope = getSubscriptionAuditScope(req);
+
     await logAuditEvent(req, {
-      action: "billing.subscription_resumed",
-      resourceType: "billing",
+      action: `${auditScope.actionPrefix}.subscription_resumed`,
+      resourceType: auditScope.resourceType,
       resourceId: clinic.id,
       metadata: {
         status: "active",
+        page: "upgrade",
+        plan: updatedClinic.plan,
       },
     });
 
