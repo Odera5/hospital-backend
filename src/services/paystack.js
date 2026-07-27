@@ -431,14 +431,24 @@ export const syncClinicWithTransaction = async (transaction) => {
 
   const resolvedPlanType = resolveTransactionPlanType(transaction, clinic.plan);
 
-  const subscriptionEnds = computeSubscriptionEndDate({
-    paidAt: transaction?.paid_at || transaction?.paidAt || transaction?.created_at,
-    interval:
-      transaction?.plan_object?.interval ||
-      transaction?.plan?.interval ||
-      MONTHLY_INTERVAL,
-    currentSubscriptionEnds: clinic.subscriptionEnds,
-  });
+  const transactionReference = transaction?.reference || null;
+  const alreadyProcessedReference = Boolean(
+    transactionReference &&
+    clinic.paystackLastReference === transactionReference &&
+    clinic.paystackSubscriptionStatus &&
+    clinic.subscriptionEnds,
+  );
+
+  const subscriptionEnds = alreadyProcessedReference
+    ? clinic.subscriptionEnds
+    : computeSubscriptionEndDate({
+        paidAt: transaction?.paid_at || transaction?.paidAt || transaction?.created_at,
+        interval:
+          transaction?.plan_object?.interval ||
+          transaction?.plan?.interval ||
+          MONTHLY_INTERVAL,
+        currentSubscriptionEnds: clinic.subscriptionEnds,
+      });
 
   const updatedClinic = await prisma.clinic.update({
     where: { id: clinic.id },
@@ -466,7 +476,7 @@ export const syncClinicWithTransaction = async (transaction) => {
       paystackAuthorizationCode:
         transaction?.authorization?.authorization_code ||
         clinic.paystackAuthorizationCode,
-      paystackLastReference: transaction?.reference || clinic.paystackLastReference,
+      paystackLastReference: transactionReference || clinic.paystackLastReference,
       paystackNextPaymentDate:
         transaction?.subscription?.next_payment_date
           ? new Date(transaction.subscription.next_payment_date)
@@ -589,6 +599,19 @@ export const disablePaystackSubscription = async ({
   emailToken,
 }) => {
   await callPaystack("/subscription/disable", {
+    method: "POST",
+    body: JSON.stringify({
+      code: subscriptionCode,
+      token: emailToken,
+    }),
+  });
+};
+
+export const enablePaystackSubscription = async ({
+  subscriptionCode,
+  emailToken,
+}) => {
+  await callPaystack("/subscription/enable", {
     method: "POST",
     body: JSON.stringify({
       code: subscriptionCode,

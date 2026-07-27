@@ -5,6 +5,7 @@ import {
   getBillingOverview,
   getPaystackManageLink,
   initializePaystackCheckout,
+  resumePaystackSubscription,
   verifyPaystackCheckout,
   verifyPaystackCheckoutPublic,
 } from "../controllers/billingController.js";
@@ -21,6 +22,7 @@ router.post(
   authorizeRoles("admin"),
   validatePaystackInitialization,
   initializePaystackCheckout,
+  resumePaystackSubscription,
 );
 router.get(
   "/paystack/manage-link",
@@ -40,6 +42,12 @@ router.post(
   protect,
   authorizeRoles("admin"),
   cancelPaystackSubscription,
+);
+router.post(
+  "/paystack/resume",
+  protect,
+  authorizeRoles("admin"),
+  resumePaystackSubscription,
 );
 
 export default router;

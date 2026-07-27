@@ -2,6 +2,7 @@ import { prisma } from "../lib/prisma.js";
 import { logAuditEvent } from "../services/auditLog.js";
 import {
   disablePaystackSubscription,
+  enablePaystackSubscription,
   isInactivePaystackSubscriptionError,
   recoverClinicPaystackSubscription,
   generatePaystackManageLink,
@@ -219,6 +220,57 @@ export const cancelPaystackSubscription = async (req, res) => {
   }
 };
 
+export const resumePaystackSubscription = async (req, res) => {
+  try {
+    let clinic = await prisma.clinic.findUnique({
+      where: { id: req.user.clinicId },
+    });
+
+    if (!clinic) {
+      return res.status(404).json({ message: "Clinic not found" });
+    }
+
+    clinic = await recoverClinicPaystackSubscription(clinic, { forceRefresh: true });
+
+    if (!clinic.paystackSubscriptionCode || !clinic.paystackSubscriptionEmailToken) {
+      return res.status(400).json({
+        message:
+          "This clinic does not have enough Paystack subscription data to resume auto-renew yet.",
+      });
+    }
+
+    await enablePaystackSubscription({
+      subscriptionCode: clinic.paystackSubscriptionCode,
+      emailToken: clinic.paystackSubscriptionEmailToken,
+    });
+
+    const updatedClinic = await prisma.clinic.update({
+      where: { id: clinic.id },
+      data: {
+        paystackSubscriptionStatus: "active",
+      },
+    });
+
+    await logAuditEvent(req, {
+      action: "billing.subscription_resumed",
+      resourceType: "billing",
+      resourceId: clinic.id,
+      metadata: {
+        status: "active",
+      },
+    });
+
+    return res.json({
+      message: "Auto-renew has been resumed for this subscription.",
+      clinic: serializeBillingClinic(updatedClinic),
+    });
+  } catch (error) {
+    console.error("Resume Paystack subscription error:", error);
+    return res.status(error.statusCode || 500).json({
+      message: error.message || "Failed to resume Paystack subscription",
+    });
+  }
+};
 export const handlePaystackWebhook = async (req, res) => {
   const signature = String(req.headers["x-paystack-signature"] || "");
   const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
