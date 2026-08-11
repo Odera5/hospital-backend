@@ -207,6 +207,7 @@ router.post("/:id/approve", protect, authorizeRoles("admin", "branch_manager", "
               ...toEncryptedPatientData({
                 name: pendingIntake.name,
                 age: pendingIntake.age,
+                dateOfBirth: pendingIntake.dateOfBirth,
                 gender: pendingIntake.gender,
                 phone: pendingIntake.phone,
                 address: pendingIntake.address,

@@ -54,7 +54,7 @@ export function decryptPatientValue(text) {
 }
 
 export function toEncryptedPatientData(data = {}) {
-  return {
+  const encrypted = {
     name: encryptPatientValue(normalizePatientString(data.name)),
     cardNumber: encryptPatientValue(normalizePatientString(data.cardNumber)),
     age: encryptPatientValue(normalizePatientString(data.age, "0")),
@@ -67,6 +67,12 @@ export function toEncryptedPatientData(data = {}) {
     nextOfKinRelationship: normalizePatientString(data.nextOfKinRelationship),
     nextOfKinAddress: normalizePatientString(data.nextOfKinAddress),
   };
+
+  if (data.dateOfBirth !== undefined) {
+    encrypted.dateOfBirth = data.dateOfBirth ? encryptPatientValue(normalizePatientString(data.dateOfBirth)) : "";
+  }
+
+  return encrypted;
 }
 
 export function toDecryptedPatient(patient) {
@@ -94,6 +100,10 @@ export function toDecryptedPatient(patient) {
       typeof patient.email === "string"
         ? decryptPatientValue(patient.email)
         : patient.email || "",
+    dateOfBirth:
+      typeof patient.dateOfBirth === "string"
+        ? decryptPatientValue(patient.dateOfBirth)
+        : patient.dateOfBirth || "",
     gender: patient.gender || "other",
     phone: patient.phone || "",
     address: patient.address || "",

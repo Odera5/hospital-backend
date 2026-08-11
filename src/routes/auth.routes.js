@@ -193,6 +193,7 @@ const serializeUser = (user) => ({
   email: user.email,
   role: user.role,
   customRoleTitle: user.customRoleTitle || null,
+  dateOfBirth: user.dateOfBirth || null,
   clinicId: user.clinicId,
   assignedBranchIds: normalizeAssignedBranchIds(user.assignedBranchIds),
   branchId: user.branchId || null,
@@ -941,6 +942,7 @@ router.post(
             emailVerified: false,
             emailVerificationToken: verification.token,
             emailVerificationExpiresAt: verification.expiresAt,
+            dateOfBirth: req.body.adminDateOfBirth?.trim() || "",
           },
           include: { clinic: true },
         });
@@ -1075,6 +1077,7 @@ router.post(
           emailVerified: false,
           emailVerificationToken: verification.token,
           emailVerificationExpiresAt: verification.expiresAt,
+          dateOfBirth: req.body.dateOfBirth?.trim() || "",
         },
         include: { clinic: true },
       });
@@ -1367,6 +1370,35 @@ router.delete(
     }
   },
 );
+
+// PUT /api/auth/profile - Update logged-in user profile details (name and dateOfBirth)
+router.put("/profile", protect, async (req, res) => {
+  try {
+    const name = req.body?.name?.trim();
+    const dateOfBirth = req.body?.dateOfBirth?.trim(); // format: YYYY-MM-DD
+
+    if (!name) {
+      return res.status(400).json({ message: "Name is required" });
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id: req.user.id },
+      data: {
+        name,
+        ...(dateOfBirth !== undefined ? { dateOfBirth } : {}),
+      },
+      include: { clinic: true },
+    });
+
+    res.json({
+      message: "Profile updated successfully",
+      user: serializeUser(updatedUser),
+    });
+  } catch (error) {
+    console.error("Update profile error:", error);
+    res.status(500).json({ message: "Failed to update profile" });
+  }
+});
 
 router.post("/login", authLimiter, validateLogin, async (req, res) => {
   try {

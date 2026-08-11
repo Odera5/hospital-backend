@@ -257,6 +257,7 @@ router.post("/:clinicId", intakeLimiter, validatePublicIntake, async (req, res) 
     const nextOfKinRelationship = normalizeText(req.body?.nextOfKinRelationship);
     const nextOfKinAddress = normalizeText(req.body?.nextOfKinAddress);
     const preferredDate = req.body?.preferredDate ? new Date(req.body.preferredDate) : null;
+    const dateOfBirth = normalizeText(req.body?.dateOfBirth);
     const preferredTime = normalizeText(req.body?.preferredTime);
 
     if (!name || !age) {
@@ -292,6 +293,7 @@ router.post("/:clinicId", intakeLimiter, validatePublicIntake, async (req, res) 
         branchId: targetBranchId,
         name,
         age,
+        dateOfBirth,
         gender,
         phone,
         email,

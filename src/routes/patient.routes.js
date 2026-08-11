@@ -810,6 +810,7 @@ router.post(
     try {
       const name = normalizeText(req.body?.name);
       const age = normalizeText(req.body?.age);
+      const dateOfBirth = normalizeText(req.body?.dateOfBirth);
       const gender = normalizeText(req.body?.gender) || "other";
       const phone = normalizeText(req.body?.phone);
       const address = normalizeText(req.body?.address);
@@ -831,6 +832,7 @@ router.post(
         patientData: {
           name,
           age,
+          dateOfBirth,
           gender,
           phone,
           address,
@@ -1020,6 +1022,7 @@ router.put(
       const encryptedData = toEncryptedPatientData({
         name: updates.name,
         age: updates.age,
+        dateOfBirth: updates.dateOfBirth,
         gender: updates.gender,
         phone: updates.phone,
         address: updates.address,

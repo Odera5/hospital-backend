@@ -4,6 +4,7 @@ import connectDB from "./db.js";
 import { startAppointmentReminderWorker } from "./services/appointmentReminderService.js";
 import { ensurePatientSearchIndexesBackfilled } from "./services/patientSearchIndex.js";
 import { startTrashCleanupWorker } from "./services/trashCleanupService.js";
+import { startBirthdayGreetingWorker } from "./services/birthdayGreetingService.js";
 import { prisma } from "./lib/prisma.js";
 import app from "./app.js";
 
@@ -68,6 +69,7 @@ const startServer = async () => {
     startAppointmentReminderWorker();
     ensurePatientSearchIndexesBackfilled();
     startTrashCleanupWorker();
+    startBirthdayGreetingWorker();
   } catch (err) {
     console.error("Failed to start server:", err);
     process.exit(1);

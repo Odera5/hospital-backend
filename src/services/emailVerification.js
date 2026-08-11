@@ -301,6 +301,84 @@ export const sendPasswordResetEmail = async ({ email, name, token }) => {
   });
 };
 
+export const sendBirthdayGreetingEmail = async ({ email, name, clinicName }) => {
+  const recipientName = name?.trim() || "there";
+  const subject = `Happy Birthday from ${clinicName || "CareChrome"}! 🎉`;
+  const text = [
+    `Hello ${recipientName},`,
+    "",
+    `Happy Birthday from all of us at ${clinicName || "your clinic"}!`,
+    "We wish you a wonderful year ahead filled with joy, good health, and success.",
+    "",
+    "Best regards,",
+    `${clinicName || "CareChrome Team"}`,
+  ].join("\n");
+  const html = `
+      <div style="font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; padding: 40px 20px;">
+        <div style="max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; padding: 48px 40px; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05); text-align: center;">
+          <div style="margin-bottom: 24px; display: inline-block; background-color: #fef3c7; padding: 14px; border-radius: 50%;">
+            <table cellpadding="0" cellspacing="0" border="0" style="margin: 0 auto;">
+              <tr>
+                <td>
+                  <span style="font-size: 32px; display: block; line-height: 1;">🎉</span>
+                </td>
+              </tr>
+            </table>
+          </div>
+          <p style="margin: 0 0 12px; font-size: 13px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #d97706;">Happy Birthday!</p>
+          <h1 style="margin: 0 0 20px; font-size: 26px; font-weight: 800; color: #0f172a; line-height: 1.3;">Wishing You a Wonderful Day!</h1>
+          <p style="margin: 0 0 32px; font-size: 16px; color: #475569; line-height: 1.6; text-align: left;">
+            Hello ${recipientName},<br><br>
+            Happy Birthday from all of us at <strong>${clinicName || "your clinic"}</strong>!<br><br>
+            We hope your special day is filled with happiness, laughter, and wonderful memories. It is our pleasure to have you as a valued patient, and we look forward to caring for your smile in the year ahead.
+          </p>
+          <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 32px 0;">
+          <p style="margin: 0; font-size: 13px; color: #64748b; text-align: center;">
+            Warmest wishes,<br>
+            <strong>${clinicName || "CareChrome"}</strong>
+          </p>
+        </div>
+        <div style="max-width: 560px; margin: 24px auto 0; text-align: center; color: #94a3b8; font-size: 13px;">
+          <p style="margin: 0;">&copy; ${new Date().getFullYear()} ${clinicName || "CareChrome"}. All rights reserved.</p>
+        </div>
+      </div>
+    `;
+
+  if (isResendConfigured()) {
+    const response = await fetch(RESEND_API_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: `${clinicName || "CareChrome"} <${getSenderEmail()}>`,
+        to: [email],
+        subject,
+        text,
+        html,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      const error = new Error(`Resend API error: ${response.status} ${errorText}`);
+      error.code = "RESEND_API_ERROR";
+      throw error;
+    }
+
+    return;
+  }
+
+  await getTransporter().sendMail({
+    from: `"${clinicName || "CareChrome"}" <${getSenderEmail()}>`,
+    to: email,
+    subject,
+    text,
+    html,
+  });
+};
+
 export const getVerificationErrorMessage = (error) => {
   if (
     error?.message?.includes("SMTP is not configured") ||
