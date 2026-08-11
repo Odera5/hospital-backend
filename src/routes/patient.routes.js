@@ -697,7 +697,9 @@ router.put(
       });
 
       if (patientsToRestore.length === 0) {
-        return res.status(404).json({ message: "No matching trashed patients found" });
+        return res
+          .status(404)
+          .json({ message: "No matching trashed patients found" });
       }
 
       const restoredIds = patientsToRestore.map((p) => p.id);
@@ -725,7 +727,7 @@ router.put(
       console.error("Bulk restore error:", error);
       res.status(500).json({ message: "Failed to restore patients" });
     }
-  }
+  },
 );
 
 // DELETE /api/patients/trash/permanent - Bulk permanently delete patients
@@ -749,7 +751,9 @@ router.delete(
       });
 
       if (patientsToDelete.length === 0) {
-        return res.status(404).json({ message: "No matching trashed patients found" });
+        return res
+          .status(404)
+          .json({ message: "No matching trashed patients found" });
       }
 
       const deleteIds = patientsToDelete.map((p) => p.id);
@@ -774,9 +778,11 @@ router.delete(
       });
     } catch (error) {
       console.error("Bulk permanent delete error:", error);
-      res.status(500).json({ message: "Failed to permanently delete patients" });
+      res
+        .status(500)
+        .json({ message: "Failed to permanently delete patients" });
     }
-  }
+  },
 );
 
 router.get(
@@ -824,6 +830,13 @@ router.post(
 
       if (!name || !age) {
         return res.status(400).json({ message: "Name and age are required" });
+      }
+
+      if (!req.user.branchId) {
+        return res.status(400).json({
+          message:
+            "No active branch selected. Please select a branch before creating a patient.",
+        });
       }
 
       const patient = await createPatientWithGeneratedCardNumber({
@@ -1733,11 +1746,9 @@ router.delete(
       }
 
       if (!record.isDeleted) {
-        return res
-          .status(400)
-          .json({
-            message: "Record must be in trash to be permanently deleted",
-          });
+        return res.status(400).json({
+          message: "Record must be in trash to be permanently deleted",
+        });
       }
 
       for (const attachment of normalizeAttachments(record.attachments)) {
