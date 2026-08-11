@@ -79,4 +79,31 @@ router.post("/", verifyToken, requireProOrEnterprise, upload.single("file"), (re
   }
 });
 
+/**
+ * @route   POST /api/upload/avatar
+ * @desc    Upload an avatar picture (accessible to all authenticated users)
+ * @access  Private
+ */
+router.post("/avatar", verifyToken, upload.single("file"), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "No file uploaded." });
+    }
+
+    const filename = path.basename(req.file.key);
+    const fileUrl = `/uploads/branding/${filename}`;
+    
+    res.status(200).json({
+      message: "Avatar uploaded successfully",
+      url: fileUrl,
+      fileName: req.file.originalname,
+      mimetype: req.file.mimetype,
+      size: req.file.size
+    });
+  } catch (error) {
+    console.error("Avatar upload error:", error);
+    res.status(500).json({ message: "Failed to process avatar upload." });
+  }
+});
+
 export default router;

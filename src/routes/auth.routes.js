@@ -194,6 +194,7 @@ const serializeUser = (user) => ({
   role: user.role,
   customRoleTitle: user.customRoleTitle || null,
   dateOfBirth: user.dateOfBirth || null,
+  avatarUrl: user.avatarUrl || null,
   clinicId: user.clinicId,
   assignedBranchIds: normalizeAssignedBranchIds(user.assignedBranchIds),
   branchId: user.branchId || null,
@@ -1371,11 +1372,12 @@ router.delete(
   },
 );
 
-// PUT /api/auth/profile - Update logged-in user profile details (name and dateOfBirth)
+// PUT /api/auth/profile - Update logged-in user profile details (name, dateOfBirth, and avatarUrl)
 router.put("/profile", protect, async (req, res) => {
   try {
     const name = req.body?.name?.trim();
     const dateOfBirth = req.body?.dateOfBirth?.trim(); // format: YYYY-MM-DD
+    const avatarUrl = req.body?.avatarUrl?.trim();
 
     if (!name) {
       return res.status(400).json({ message: "Name is required" });
@@ -1386,6 +1388,7 @@ router.put("/profile", protect, async (req, res) => {
       data: {
         name,
         ...(dateOfBirth !== undefined ? { dateOfBirth } : {}),
+        ...(avatarUrl !== undefined ? { avatarUrl } : {}),
       },
       include: { clinic: true },
     });
