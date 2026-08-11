@@ -365,7 +365,7 @@ const sendReminderEmail = async ({
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: `PrimuxCare <${getSenderEmail()}>`,
+        from: `CareChrome <${getSenderEmail()}>`,
         to: [email],
         subject,
         text,
@@ -383,7 +383,7 @@ const sendReminderEmail = async ({
 
   const transporter = await getTransporter();
   await transporter.sendMail({
-    from: `"PrimuxCare" <${getSenderEmail()}>`,
+    from: `"CareChrome" <${getSenderEmail()}>`,
     to: email,
     subject,
     text,
@@ -415,7 +415,7 @@ export const sendBookingConfirmationEmail = async ({
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: `PrimuxCare <${getSenderEmail()}>`,
+        from: `CareChrome <${getSenderEmail()}>`,
         to: [email],
         subject,
         text,
@@ -433,7 +433,7 @@ export const sendBookingConfirmationEmail = async ({
 
   const transporter = await getTransporter();
   await transporter.sendMail({
-    from: `"PrimuxCare" <${getSenderEmail()}>`,
+    from: `"CareChrome" <${getSenderEmail()}>`,
     to: email,
     subject,
     text,

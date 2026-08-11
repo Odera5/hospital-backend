@@ -65,11 +65,11 @@ export const generateOtp = () => {
 export const sendVerificationEmail = async ({ email, name, token }) => {
   const verificationLink = `${getBaseUrl().replace(/\/$/, "")}/verify-email?token=${token}`;
   const recipientName = name?.trim() || "there";
-  const subject = "Welcome to PrimuxCare Management Software";
+  const subject = "Welcome to CareChrome Management Software";
   const text = [
     `Hello ${recipientName},`,
     "",
-    "Welcome to PrimuxCare Management Software.",
+    "Welcome to CareChrome Management Software.",
     "Please click the link below to confirm your email address and activate your account:",
     verificationLink,
     "",
@@ -90,8 +90,8 @@ export const sendVerificationEmail = async ({ email, name, token }) => {
               </tr>
             </table>
           </div>
-          <p style="margin: 0 0 12px; font-size: 13px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #0d9488;">PrimuxCare Verification</p>
-          <h1 style="margin: 0 0 20px; font-size: 26px; font-weight: 800; color: #0f172a; line-height: 1.3;">Welcome to PrimuxCare</h1>
+          <p style="margin: 0 0 12px; font-size: 13px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #0d9488;">CareChrome Verification</p>
+          <h1 style="margin: 0 0 20px; font-size: 26px; font-weight: 800; color: #0f172a; line-height: 1.3;">Welcome to CareChrome</h1>
           <p style="margin: 0 0 32px; font-size: 16px; color: #475569; line-height: 1.6; text-align: left;">
             Hello ${recipientName},<br><br>
             Your account has been created successfully. To complete your registration and secure your account, please verify your email address. This verification link is valid for 24 hours.
@@ -110,7 +110,7 @@ export const sendVerificationEmail = async ({ email, name, token }) => {
           </p>
         </div>
         <div style="max-width: 560px; margin: 24px auto 0; text-align: center; color: #94a3b8; font-size: 13px;">
-          <p style="margin: 0;">&copy; ${new Date().getFullYear()} PrimuxCare Management. All rights reserved.</p>
+          <p style="margin: 0;">&copy; ${new Date().getFullYear()} CareChrome Management. All rights reserved.</p>
         </div>
       </div>
     `;
@@ -123,7 +123,7 @@ export const sendVerificationEmail = async ({ email, name, token }) => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: `PrimuxCare <${getSenderEmail()}>`,
+        from: `CareChrome <${getSenderEmail()}>`,
         to: [email],
         subject,
         text,
@@ -142,7 +142,7 @@ export const sendVerificationEmail = async ({ email, name, token }) => {
   }
 
   await getTransporter().sendMail({
-    from: `"PrimuxCare" <${getSenderEmail()}>`,
+    from: `"CareChrome" <${getSenderEmail()}>`,
     to: email,
     subject,
     text,
@@ -152,7 +152,7 @@ export const sendVerificationEmail = async ({ email, name, token }) => {
 
 export const sendDeactivationOtpEmail = async ({ email, name, otp }) => {
   const recipientName = name?.trim() || "there";
-  const subject = "Clinic Deactivation Verification Code - PrimuxCare";
+  const subject = "Clinic Deactivation Verification Code - CareChrome";
   const text = [
     `Hello ${recipientName},`,
     "",
@@ -182,7 +182,7 @@ export const sendDeactivationOtpEmail = async ({ email, name, otp }) => {
           </p>
         </div>
         <div style="max-width: 560px; margin: 24px auto 0; text-align: center; color: #94a3b8; font-size: 13px;">
-          <p style="margin: 0;">&copy; ${new Date().getFullYear()} PrimuxCare Management. All rights reserved.</p>
+          <p style="margin: 0;">&copy; ${new Date().getFullYear()} CareChrome Management. All rights reserved.</p>
         </div>
       </div>
     `;
@@ -195,7 +195,7 @@ export const sendDeactivationOtpEmail = async ({ email, name, otp }) => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: `PrimuxCare <${getSenderEmail()}>`,
+        from: `CareChrome <${getSenderEmail()}>`,
         to: [email],
         subject,
         text,
@@ -214,7 +214,7 @@ export const sendDeactivationOtpEmail = async ({ email, name, otp }) => {
   }
 
   await getTransporter().sendMail({
-    from: `"PrimuxCare" <${getSenderEmail()}>`,
+    from: `"CareChrome" <${getSenderEmail()}>`,
     to: email,
     subject,
     text,
@@ -225,7 +225,7 @@ export const sendDeactivationOtpEmail = async ({ email, name, otp }) => {
 export const sendPasswordResetEmail = async ({ email, name, token }) => {
   const resetLink = `${getBaseUrl().replace(/\/$/, "")}/reset-password?token=${token}`;
   const recipientName = name?.trim() || "there";
-  const subject = "Password Reset Request - PrimuxCare";
+  const subject = "Password Reset Request - CareChrome";
   const text = [
     `Hello ${recipientName},`,
     "",
@@ -242,7 +242,7 @@ export const sendPasswordResetEmail = async ({ email, name, token }) => {
           <h1 style="margin: 0 0 20px; font-size: 26px; font-weight: 800; color: #0f172a; line-height: 1.3;">Reset Your Password</h1>
           <p style="margin: 0 0 32px; font-size: 16px; color: #475569; line-height: 1.6; text-align: left;">
             Hello ${recipientName},<br><br>
-            We received a request to reset the password for your PrimuxCare account. Click the button below to choose a new password. This link is valid for 1 hour.
+            We received a request to reset the password for your CareChrome account. Click the button below to choose a new password. This link is valid for 1 hour.
           </p>
           <div style="margin: 32px 0;">
             <a href="${resetLink}" style="display: inline-block; background-color: #0f766e; color: #ffffff; text-decoration: none; padding: 16px 36px; border-radius: 12px; font-weight: 600; font-size: 16px;">
@@ -261,7 +261,7 @@ export const sendPasswordResetEmail = async ({ email, name, token }) => {
           </p>
         </div>
         <div style="max-width: 560px; margin: 24px auto 0; text-align: center; color: #94a3b8; font-size: 13px;">
-          <p style="margin: 0;">&copy; ${new Date().getFullYear()} PrimuxCare Management. All rights reserved.</p>
+          <p style="margin: 0;">&copy; ${new Date().getFullYear()} CareChrome Management. All rights reserved.</p>
         </div>
       </div>
     `;
@@ -274,7 +274,7 @@ export const sendPasswordResetEmail = async ({ email, name, token }) => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: `PrimuxCare <${getSenderEmail()}>`,
+        from: `CareChrome <${getSenderEmail()}>`,
         to: [email],
         subject,
         text,
@@ -293,7 +293,7 @@ export const sendPasswordResetEmail = async ({ email, name, token }) => {
   }
 
   await getTransporter().sendMail({
-    from: `"PrimuxCare" <${getSenderEmail()}>`,
+    from: `"CareChrome" <${getSenderEmail()}>`,
     to: email,
     subject,
     text,

@@ -53,7 +53,7 @@ export const isTrialingClinic = (clinic) =>
 export const isUpgradeRequired = (clinic) => !hasActiveProAccess(clinic);
 
 export const getUpgradeRequiredMessage = () =>
-  "Your clinic no longer has active Pro access. Upgrade your clinic to continue using PrimuxCare.";
+  "Your clinic no longer has active Pro access. Upgrade your clinic to continue using CareChrome.";
 
 export const getReminderAccessRequiredMessage = () =>
   "Automated reminders require active Pro access through your 14-day trial or paid Pro subscription.";

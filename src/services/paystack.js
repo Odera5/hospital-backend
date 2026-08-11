@@ -10,25 +10,25 @@ import {
 const PAYSTACK_API_BASE_URL = "https://api.paystack.co";
 const PRO_PLAN_TYPE = "PRO";
 const ENTERPRISE_PLAN_TYPE = "ENTERPRISE";
-const PRO_PLAN_NAME = "PrimuxCare Pro Monthly";
+const PRO_PLAN_NAME = "CareChrome Pro Monthly";
 const PRO_PLAN_DESCRIPTION =
-  "PrimuxCare Pro monthly subscription for clinics in Nigeria";
+  "CareChrome Pro monthly subscription for clinics in Nigeria";
 const MONTHLY_INTERVAL = "monthly";
 const DEFAULT_PRO_AMOUNT_KOBO = 10000000;
-const ENTERPRISE_PLAN_NAME = "PrimuxCare Enterprise Monthly";
+const ENTERPRISE_PLAN_NAME = "CareChrome Enterprise Monthly";
 const ENTERPRISE_PLAN_DESCRIPTION =
-  "PrimuxCare Enterprise monthly subscription for multi-branch clinics in Nigeria";
+  "CareChrome Enterprise monthly subscription for multi-branch clinics in Nigeria";
 const DEFAULT_ENTERPRISE_AMOUNT_KOBO = 15000000;
 
-const PRO_PLAN_NAME_ANNUAL = "PrimuxCare Pro Annual";
+const PRO_PLAN_NAME_ANNUAL = "CareChrome Pro Annual";
 const PRO_PLAN_DESCRIPTION_ANNUAL =
-  "PrimuxCare Pro annual subscription for clinics in Nigeria";
+  "CareChrome Pro annual subscription for clinics in Nigeria";
 const ANNUAL_INTERVAL = "annually";
 const DEFAULT_PRO_AMOUNT_KOBO_ANNUAL = 100000000;
 
-const ENTERPRISE_PLAN_NAME_ANNUAL = "PrimuxCare Enterprise Annual";
+const ENTERPRISE_PLAN_NAME_ANNUAL = "CareChrome Enterprise Annual";
 const ENTERPRISE_PLAN_DESCRIPTION_ANNUAL =
-  "PrimuxCare Enterprise annual subscription for multi-branch clinics in Nigeria";
+  "CareChrome Enterprise annual subscription for multi-branch clinics in Nigeria";
 const DEFAULT_ENTERPRISE_AMOUNT_KOBO_ANNUAL = 150000000;
 export const SUPPORTED_PLAN_TYPES = [PRO_PLAN_TYPE, ENTERPRISE_PLAN_TYPE];
 export const SUPPORTED_BILLING_INTERVALS = [
