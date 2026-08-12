@@ -308,8 +308,42 @@ model AuditLog {
   @@index([patientId, createdAt])
 }
 
+model BillingWebhook {
+  id           String   @id
+  eventType    String   @default("")
+  payload      Json     @default("{}")
+  signature    String?
+  processed    Boolean  @default(false)
+  attempts     Int      @default(0)
+  lastError    String?
+  processedAt  DateTime?
+  receivedAt   DateTime @default(now())
+
+  @@index([processed])
+}
+
 enum PlanType {
   FREE
   PRO
   ENTERPRISE
+}
+
+model SubscriptionHistory {
+  id             String    @id @default(cuid())
+  clinicId       String
+  actorId        String?
+  fromPlan       PlanType
+  toPlan         PlanType
+  fromInterval   String
+  toInterval     String
+  amount         Float
+  prorationCredit Float   @default(0)
+  paystackReference String?
+  status         String    @default("pending")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  clinic         Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId])
 }

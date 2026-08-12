@@ -31,10 +31,7 @@ const ENTERPRISE_PLAN_DESCRIPTION_ANNUAL =
   "CareChrome Enterprise annual subscription for multi-branch clinics in Nigeria";
 const DEFAULT_ENTERPRISE_AMOUNT_KOBO_ANNUAL = 150000000;
 export const SUPPORTED_PLAN_TYPES = [PRO_PLAN_TYPE, ENTERPRISE_PLAN_TYPE];
-export const SUPPORTED_BILLING_INTERVALS = [
-  MONTHLY_INTERVAL,
-  ANNUAL_INTERVAL,
-];
+export const SUPPORTED_BILLING_INTERVALS = [MONTHLY_INTERVAL, ANNUAL_INTERVAL];
 
 export const parseRequestedBillingInterval = (interval) => {
   const normalizedInterval = String(interval || "")
@@ -88,47 +85,59 @@ const requirePaystackSecretKey = () => {
   return key;
 };
 
-const getPlanConfig = (planType = PRO_PLAN_TYPE, interval = MONTHLY_INTERVAL) => {
+const getPlanConfig = (
+  planType = PRO_PLAN_TYPE,
+  interval = MONTHLY_INTERVAL,
+) => {
   const normalizedPlanType = parseRequestedPlanType(planType);
   const normalizedInterval = parseRequestedBillingInterval(interval);
 
   if (normalizedPlanType === ENTERPRISE_PLAN_TYPE) {
     if (normalizedInterval === ANNUAL_INTERVAL) {
-      const configuredAmount = Number(process.env.PAYSTACK_ENTERPRISE_PLAN_AMOUNT_KOBO_ANNUAL);
+      const configuredAmount = Number(
+        process.env.PAYSTACK_ENTERPRISE_PLAN_AMOUNT_KOBO_ANNUAL,
+      );
       return {
         planType: ENTERPRISE_PLAN_TYPE,
         name: ENTERPRISE_PLAN_NAME_ANNUAL,
         description: ENTERPRISE_PLAN_DESCRIPTION_ANNUAL,
-        amount: Number.isFinite(configuredAmount) && configuredAmount > 0
-          ? Math.round(configuredAmount)
-          : DEFAULT_ENTERPRISE_AMOUNT_KOBO_ANNUAL,
+        amount:
+          Number.isFinite(configuredAmount) && configuredAmount > 0
+            ? Math.round(configuredAmount)
+            : DEFAULT_ENTERPRISE_AMOUNT_KOBO_ANNUAL,
         interval: ANNUAL_INTERVAL,
         envPlanCode: process.env.PAYSTACK_ENTERPRISE_PLAN_CODE_ANNUAL?.trim(),
       };
     }
 
-    const configuredAmount = Number(process.env.PAYSTACK_ENTERPRISE_PLAN_AMOUNT_KOBO);
+    const configuredAmount = Number(
+      process.env.PAYSTACK_ENTERPRISE_PLAN_AMOUNT_KOBO,
+    );
     return {
       planType: ENTERPRISE_PLAN_TYPE,
       name: ENTERPRISE_PLAN_NAME,
       description: ENTERPRISE_PLAN_DESCRIPTION,
-      amount: Number.isFinite(configuredAmount) && configuredAmount > 0
-        ? Math.round(configuredAmount)
-        : DEFAULT_ENTERPRISE_AMOUNT_KOBO,
+      amount:
+        Number.isFinite(configuredAmount) && configuredAmount > 0
+          ? Math.round(configuredAmount)
+          : DEFAULT_ENTERPRISE_AMOUNT_KOBO,
       interval: MONTHLY_INTERVAL,
       envPlanCode: process.env.PAYSTACK_ENTERPRISE_PLAN_CODE?.trim(),
     };
   }
 
   if (normalizedInterval === ANNUAL_INTERVAL) {
-    const configuredAmount = Number(process.env.PAYSTACK_PRO_PLAN_AMOUNT_KOBO_ANNUAL);
+    const configuredAmount = Number(
+      process.env.PAYSTACK_PRO_PLAN_AMOUNT_KOBO_ANNUAL,
+    );
     return {
       planType: PRO_PLAN_TYPE,
       name: PRO_PLAN_NAME_ANNUAL,
       description: PRO_PLAN_DESCRIPTION_ANNUAL,
-      amount: Number.isFinite(configuredAmount) && configuredAmount > 0
-        ? Math.round(configuredAmount)
-        : DEFAULT_PRO_AMOUNT_KOBO_ANNUAL,
+      amount:
+        Number.isFinite(configuredAmount) && configuredAmount > 0
+          ? Math.round(configuredAmount)
+          : DEFAULT_PRO_AMOUNT_KOBO_ANNUAL,
       interval: ANNUAL_INTERVAL,
       envPlanCode: process.env.PAYSTACK_PRO_PLAN_CODE_ANNUAL?.trim(),
     };
@@ -139,40 +148,116 @@ const getPlanConfig = (planType = PRO_PLAN_TYPE, interval = MONTHLY_INTERVAL) =>
     planType: PRO_PLAN_TYPE,
     name: PRO_PLAN_NAME,
     description: PRO_PLAN_DESCRIPTION,
-    amount: Number.isFinite(configuredAmount) && configuredAmount > 0
-      ? Math.round(configuredAmount)
-      : DEFAULT_PRO_AMOUNT_KOBO,
+    amount:
+      Number.isFinite(configuredAmount) && configuredAmount > 0
+        ? Math.round(configuredAmount)
+        : DEFAULT_PRO_AMOUNT_KOBO,
     interval: MONTHLY_INTERVAL,
     envPlanCode: process.env.PAYSTACK_PRO_PLAN_CODE?.trim(),
   };
 };
 
-const getPaystackHeaders = () => ({
-  Authorization: `Bearer ${requirePaystackSecretKey()}`,
-  "Content-Type": "application/json",
-});
+export { getPlanConfig };
 
-const callPaystack = async (path, options = {}) => {
-  const response = await fetch(`${PAYSTACK_API_BASE_URL}${path}`, {
-    ...options,
-    headers: {
-      ...getPaystackHeaders(),
-      ...(options.headers || {}),
-    },
-  });
-
-  const payload = await response.json().catch(() => null);
-
-  if (!response.ok || !payload?.status) {
+export const initializeOneOffCharge = async ({
+  clinic,
+  actor,
+  amount,
+  description,
+}) => {
+  if (!clinic || !clinic.email) {
     const error = new Error(
-      payload?.message || `Paystack request failed with status ${response.status}`,
+      "Clinic must have an email to initialize one-off charge",
     );
-    error.statusCode = response.status;
-    error.payload = payload;
+    error.statusCode = 400;
     throw error;
   }
 
-  return payload.data;
+  const reference = `pcare-upgrade-${clinic.id}-${Date.now()}`;
+  const callbackBaseUrl = resolveBaseUrl().replace(/\/$/, "");
+
+  const data = await callPaystack("/transaction/initialize", {
+    method: "POST",
+    body: JSON.stringify({
+      email: clinic.email,
+      amount: Math.round(Number(amount) || 0),
+      currency: "NGN",
+      reference,
+      callback_url: `${callbackBaseUrl}/billing/paystack/callback`,
+      metadata: {
+        clinicId: clinic.id,
+        clinicName: clinic.name,
+        actorId: actor?.id || null,
+        actorEmail: actor?.email || null,
+        description: description || "Subscription upgrade",
+        custom_fields: buildCustomFields(clinic),
+      },
+    }),
+    idempotencyKey: reference,
+  });
+
+  await prisma.clinic.update({
+    where: { id: clinic.id },
+    data: { paystackLastReference: data.reference },
+  });
+
+  return {
+    authorizationUrl: data.authorization_url,
+    accessCode: data.access_code,
+    reference: data.reference,
+  };
+};
+
+const getPaystackHeaders = (extra = {}) => ({
+  Authorization: `Bearer ${requirePaystackSecretKey()}`,
+  "Content-Type": "application/json",
+  ...extra,
+});
+
+const callPaystack = async (path, options = {}) => {
+  const maxRetries = Number.isFinite(options.retries) ? options.retries : 2;
+  const idempotencyKey =
+    options.idempotencyKey || options.headers?.["Idempotency-Key"];
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(`${PAYSTACK_API_BASE_URL}${path}`, {
+        ...options,
+        headers: {
+          ...getPaystackHeaders(
+            idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {},
+          ),
+          ...(options.headers || {}),
+        },
+      });
+
+      const payload = await response.json().catch(() => null);
+
+      if (!response.ok || !payload?.status) {
+        const error = new Error(
+          payload?.message ||
+            `Paystack request failed with status ${response.status}`,
+        );
+        error.statusCode = response.status;
+        error.payload = payload;
+
+        // Retry on server errors
+        if (response.status >= 500 && attempt < maxRetries) {
+          await new Promise((r) => setTimeout(r, 200 * Math.pow(2, attempt)));
+          continue;
+        }
+
+        throw error;
+      }
+
+      return payload.data;
+    } catch (err) {
+      // Network or other unexpected error — retry unless out of attempts
+      const isLastAttempt = attempt >= maxRetries;
+      if (isLastAttempt) throw err;
+      await new Promise((r) => setTimeout(r, 200 * Math.pow(2, attempt)));
+    }
+  }
 };
 
 const addMonths = (dateInput, months) => {
@@ -273,20 +358,21 @@ export const serializeBillingClinic = (clinic) => ({
 });
 
 const inferPlanTypeFromPlanDetails = (transaction) => {
-  const envEnterprisePlanCode = process.env.PAYSTACK_ENTERPRISE_PLAN_CODE?.trim();
-  const envEnterprisePlanCodeAnnual = process.env.PAYSTACK_ENTERPRISE_PLAN_CODE_ANNUAL?.trim();
+  const envEnterprisePlanCode =
+    process.env.PAYSTACK_ENTERPRISE_PLAN_CODE?.trim();
+  const envEnterprisePlanCodeAnnual =
+    process.env.PAYSTACK_ENTERPRISE_PLAN_CODE_ANNUAL?.trim();
   const envProPlanCodeMonthly = process.env.PAYSTACK_PRO_PLAN_CODE?.trim();
-  const envProPlanCodeAnnual = process.env.PAYSTACK_PRO_PLAN_CODE_ANNUAL?.trim();
+  const envProPlanCodeAnnual =
+    process.env.PAYSTACK_PRO_PLAN_CODE_ANNUAL?.trim();
   const planCode = String(
-    transaction?.plan_object?.plan_code ||
-      transaction?.plan?.plan_code ||
-      "",
+    transaction?.plan_object?.plan_code || transaction?.plan?.plan_code || "",
   ).trim();
   const planName = String(
-    transaction?.plan_object?.name ||
-      transaction?.plan?.name ||
-      "",
-  ).trim().toLowerCase();
+    transaction?.plan_object?.name || transaction?.plan?.name || "",
+  )
+    .trim()
+    .toLowerCase();
   const amount = Number(
     transaction?.plan_object?.amount ??
       transaction?.plan?.amount ??
@@ -326,7 +412,10 @@ const inferPlanTypeFromPlanDetails = (transaction) => {
   return null;
 };
 
-const resolveTransactionPlanType = (transaction, fallbackPlanType = PRO_PLAN_TYPE) => {
+const resolveTransactionPlanType = (
+  transaction,
+  fallbackPlanType = PRO_PLAN_TYPE,
+) => {
   const metadataPlanType = String(transaction?.metadata?.plan || "")
     .trim()
     .toUpperCase();
@@ -382,7 +471,11 @@ export const initializePaystackSubscription = async ({
   interval = MONTHLY_INTERVAL,
 }) => {
   const normalizedPlanType = parseRequestedPlanType(planType);
-  const planCode = await ensurePaystackPlan(clinic, normalizedPlanType, interval);
+  const planCode = await ensurePaystackPlan(
+    clinic,
+    normalizedPlanType,
+    interval,
+  );
   const config = getPlanConfig(normalizedPlanType, interval);
   const reference = `pcare-${clinic.id}-${Date.now()}`;
   const callbackBaseUrl = resolveBaseUrl().replace(/\/$/, "");
@@ -406,6 +499,7 @@ export const initializePaystackSubscription = async ({
         custom_fields: buildCustomFields(clinic),
       },
     }),
+    idempotencyKey: reference,
   });
 
   await prisma.clinic.update({
@@ -442,7 +536,10 @@ export const syncClinicWithTransaction = async (transaction) => {
   const subscriptionEnds = alreadyProcessedReference
     ? clinic.subscriptionEnds
     : computeSubscriptionEndDate({
-        paidAt: transaction?.paid_at || transaction?.paidAt || transaction?.created_at,
+        paidAt:
+          transaction?.paid_at ||
+          transaction?.paidAt ||
+          transaction?.created_at,
         interval:
           transaction?.plan_object?.interval ||
           transaction?.plan?.interval ||
@@ -476,13 +573,13 @@ export const syncClinicWithTransaction = async (transaction) => {
       paystackAuthorizationCode:
         transaction?.authorization?.authorization_code ||
         clinic.paystackAuthorizationCode,
-      paystackLastReference: transactionReference || clinic.paystackLastReference,
-      paystackNextPaymentDate:
-        transaction?.subscription?.next_payment_date
-          ? new Date(transaction.subscription.next_payment_date)
-          : transaction?.next_payment_date
-            ? new Date(transaction.next_payment_date)
-            : clinic.paystackNextPaymentDate,
+      paystackLastReference:
+        transactionReference || clinic.paystackLastReference,
+      paystackNextPaymentDate: transaction?.subscription?.next_payment_date
+        ? new Date(transaction.subscription.next_payment_date)
+        : transaction?.next_payment_date
+          ? new Date(transaction.next_payment_date)
+          : clinic.paystackNextPaymentDate,
       subscriptionEnds: subscriptionEnds || clinic.subscriptionEnds,
     },
   });
@@ -491,10 +588,9 @@ export const syncClinicWithTransaction = async (transaction) => {
 };
 
 export const fetchPaystackTransaction = async (reference) => {
-  return callPaystack(
-    `/transaction/verify/${encodeURIComponent(reference)}`,
-    { method: "GET" },
-  );
+  return callPaystack(`/transaction/verify/${encodeURIComponent(reference)}`, {
+    method: "GET",
+  });
 };
 
 export const verifyPaystackTransaction = async (reference) => {
@@ -514,7 +610,10 @@ export const verifyPaystackTransaction = async (reference) => {
   return { transaction, clinic };
 };
 
-export const disableClinicSubscription = async (clinicId, status = "disabled") =>
+export const disableClinicSubscription = async (
+  clinicId,
+  status = "disabled",
+) =>
   prisma.clinic.update({
     where: { id: clinicId },
     data: {
@@ -532,10 +631,60 @@ export const processPaystackWebhookEvent = async (event) => {
   }
 
   if (eventType === "charge.success") {
-    return syncClinicWithTransaction(payload);
+    const transaction = payload;
+
+    // Sync clinic data from transaction first
+    const clinic = await syncClinicWithTransaction(transaction);
+
+    try {
+      const reference = String(transaction?.reference || "");
+      if (reference) {
+        const history = await prisma.subscriptionHistory.findFirst({
+          where: { paystackReference: reference, status: "pending" },
+        });
+        if (history) {
+          // compute new subscription end date based on paidAt and toInterval
+          const paidAt =
+            transaction?.paid_at ||
+            transaction?.paidAt ||
+            transaction?.created_at ||
+            new Date().toISOString();
+          const newSubscriptionEnds = computeSubscriptionEndDate({
+            paidAt,
+            interval: history.toInterval,
+            currentSubscriptionEnds: clinic?.subscriptionEnds,
+          });
+
+          // finalize history and apply plan change atomically
+          await prisma.$transaction([
+            prisma.subscriptionHistory.update({
+              where: { id: history.id },
+              data: { status: "completed" },
+            }),
+            prisma.clinic.update({
+              where: { id: history.clinicId },
+              data: {
+                plan: history.toPlan,
+                subscriptionEnds: newSubscriptionEnds,
+              },
+            }),
+          ]);
+        }
+      }
+    } catch (err) {
+      console.error(
+        "Failed to reconcile SubscriptionHistory for charge.success",
+        err,
+      );
+    }
+
+    return clinic;
   }
 
-  if (eventType === "subscription.create" || eventType === "subscription.not_renew") {
+  if (
+    eventType === "subscription.create" ||
+    eventType === "subscription.not_renew"
+  ) {
     const clinic = await findClinicForTransaction(payload);
     if (!clinic) {
       return null;
@@ -622,14 +771,20 @@ export const enablePaystackSubscription = async ({
 
 export const isInactivePaystackSubscriptionError = (error) => {
   const message = String(error?.message || "").toLowerCase();
-  return message.includes("subscription") &&
-    (message.includes("already inactive") || message.includes("not found or already inactive"));
+  return (
+    message.includes("subscription") &&
+    (message.includes("already inactive") ||
+      message.includes("not found or already inactive"))
+  );
 };
 
 export const fetchCustomerSubscriptions = async (customerCode) => {
-  return callPaystack(`/subscription?customer=${encodeURIComponent(customerCode)}`, {
-    method: "GET",
-  });
+  return callPaystack(
+    `/subscription?customer=${encodeURIComponent(customerCode)}`,
+    {
+      method: "GET",
+    },
+  );
 };
 
 export const fetchPaystackCustomer = async (emailOrCode) => {
@@ -649,15 +804,26 @@ const subscriptionMatchesClinicPlan = (subscription, clinic) => {
 };
 
 const chooseRecoverableSubscription = (subscriptions, clinic) => {
-  const candidates = (Array.isArray(subscriptions) ? subscriptions : [])
-    .filter((subscription) => subscription?.subscription_code && subscription?.email_token);
+  const candidates = (Array.isArray(subscriptions) ? subscriptions : []).filter(
+    (subscription) =>
+      subscription?.subscription_code && subscription?.email_token,
+  );
 
-  return candidates.find((subscription) =>
-    usableSubscriptionStatuses.includes(String(subscription.status || "").toLowerCase()) &&
-    subscriptionMatchesClinicPlan(subscription, clinic)
-  ) || candidates.find((subscription) =>
-    usableSubscriptionStatuses.includes(String(subscription.status || "").toLowerCase())
-  ) || candidates[0] || null;
+  return (
+    candidates.find(
+      (subscription) =>
+        usableSubscriptionStatuses.includes(
+          String(subscription.status || "").toLowerCase(),
+        ) && subscriptionMatchesClinicPlan(subscription, clinic),
+    ) ||
+    candidates.find((subscription) =>
+      usableSubscriptionStatuses.includes(
+        String(subscription.status || "").toLowerCase(),
+      ),
+    ) ||
+    candidates[0] ||
+    null
+  );
 };
 
 const applyRecoveredSubscription = async (clinic, subscription) => {
@@ -670,7 +836,8 @@ const applyRecoveredSubscription = async (clinic, subscription) => {
     data: {
       paystackSubscriptionCode: subscription.subscription_code,
       paystackSubscriptionEmailToken: subscription.email_token,
-      paystackSubscriptionStatus: subscription.status || clinic.paystackSubscriptionStatus,
+      paystackSubscriptionStatus:
+        subscription.status || clinic.paystackSubscriptionStatus,
       paystackNextPaymentDate: subscription.next_payment_date
         ? new Date(subscription.next_payment_date)
         : clinic.paystackNextPaymentDate,
@@ -685,8 +852,11 @@ const recoverableSubscriptionFromTransaction = (transaction) => {
     subscription_code:
       subscription.subscription_code || transaction?.subscription_code || null,
     email_token: subscription.email_token || transaction?.email_token || null,
-    status: subscription.status || (transaction?.status === "success" ? "active" : null),
-    next_payment_date: subscription.next_payment_date || transaction?.next_payment_date || null,
+    status:
+      subscription.status ||
+      (transaction?.status === "success" ? "active" : null),
+    next_payment_date:
+      subscription.next_payment_date || transaction?.next_payment_date || null,
   };
 };
 
@@ -698,13 +868,18 @@ export const recoverClinicPaystackSubscription = async (
 
   if (recoveredClinic.paystackLastReference) {
     try {
-      const transaction = await fetchPaystackTransaction(recoveredClinic.paystackLastReference);
+      const transaction = await fetchPaystackTransaction(
+        recoveredClinic.paystackLastReference,
+      );
       recoveredClinic = await applyRecoveredSubscription(
         recoveredClinic,
         recoverableSubscriptionFromTransaction(transaction),
       );
     } catch (error) {
-      console.error("Failed to recover subscription from last Paystack reference:", error);
+      console.error(
+        "Failed to recover subscription from last Paystack reference:",
+        error,
+      );
     }
   }
 
@@ -734,17 +909,28 @@ export const recoverClinicPaystackSubscription = async (
         subscriptionSources.push(subscriptions);
       }
     } catch (error) {
-      console.error("Failed to recover subscription from Paystack customer:", error);
+      console.error(
+        "Failed to recover subscription from Paystack customer:",
+        error,
+      );
     }
   }
 
   for (const subscriptions of subscriptionSources) {
-    const subscription = chooseRecoverableSubscription(subscriptions, recoveredClinic);
+    const subscription = chooseRecoverableSubscription(
+      subscriptions,
+      recoveredClinic,
+    );
     if (subscription) {
-      recoveredClinic = await applyRecoveredSubscription(recoveredClinic, subscription);
+      recoveredClinic = await applyRecoveredSubscription(
+        recoveredClinic,
+        subscription,
+      );
       break;
     }
   }
 
   return recoveredClinic;
 };
+
+export { computeSubscriptionEndDate };

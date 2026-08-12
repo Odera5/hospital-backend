@@ -8,12 +8,20 @@ import {
   resumePaystackSubscription,
   verifyPaystackCheckout,
   verifyPaystackCheckoutPublic,
+  upgradeSubscription,
 } from "../controllers/billingController.js";
-import { validatePaystackInitialization, validatePaystackVerify } from "../middleware/validators.js";
+import {
+  validatePaystackInitialization,
+  validatePaystackVerify,
+} from "../middleware/validators.js";
 
 const router = express.Router();
 
-router.get("/paystack/verify-public", validatePaystackVerify, verifyPaystackCheckoutPublic);
+router.get(
+  "/paystack/verify-public",
+  validatePaystackVerify,
+  verifyPaystackCheckoutPublic,
+);
 
 router.get("/", protect, authorizeRoles("admin"), getBillingOverview);
 router.post(
@@ -49,5 +57,7 @@ router.post(
   authorizeRoles("admin"),
   resumePaystackSubscription,
 );
+
+router.post("/upgrade", protect, authorizeRoles("admin"), upgradeSubscription);
 
 export default router;
