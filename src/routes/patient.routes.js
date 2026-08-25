@@ -1027,8 +1027,9 @@ router.put(
         return res.status(404).json({ message: "Patient not found" });
       }
 
+      const decryptedPatient = toDecryptedPatient(existingPatient);
       const updates = {
-        ...existingPatient,
+        ...decryptedPatient,
         ...req.body,
       };
 
@@ -1048,7 +1049,7 @@ router.put(
       const patientSearchIndexData = buildPatientSearchIndexData({
         name: updates.name,
         age: updates.age,
-        cardNumber: toDecryptedPatient(existingPatient).cardNumber,
+        cardNumber: decryptedPatient.cardNumber,
       });
 
       // Patient card numbers remain system-controlled after registration.
