@@ -23,10 +23,11 @@ import { prisma } from "./lib/prisma.js";
 
 const app = express();
 const isProduction = process.env.NODE_ENV === "production";
+const isRender = process.env.RENDER === "true";
 const shouldTrustProxy = String(process.env.TRUST_PROXY || "")
   .trim()
   .toLowerCase();
-if (isProduction || shouldTrustProxy === "true") {
+if (isProduction || isRender || shouldTrustProxy === "true") {
   app.set("trust proxy", 1);
 }
 
