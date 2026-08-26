@@ -11,8 +11,12 @@ export const hasActivePaidSubscription = (clinic) => {
   );
   if (!hasStatus) return false;
 
-  if (clinic?.subscriptionEnds) {
-    const end = new Date(clinic.subscriptionEnds);
+  const resolvedEnds = clinic?.paystackNextPaymentDate && new Date(clinic.paystackNextPaymentDate) > new Date(clinic.subscriptionEnds || 0)
+    ? clinic.paystackNextPaymentDate
+    : clinic?.subscriptionEnds;
+
+  if (resolvedEnds) {
+    const end = new Date(resolvedEnds);
     if (!Number.isNaN(end.getTime())) {
       return end >= new Date();
     }
@@ -21,11 +25,15 @@ export const hasActivePaidSubscription = (clinic) => {
 };
 
 export const hasFutureSubscriptionWindow = (clinic) => {
-  if (!clinic?.subscriptionEnds) {
+  const resolvedEnds = clinic?.paystackNextPaymentDate && new Date(clinic.paystackNextPaymentDate) > new Date(clinic.subscriptionEnds || 0)
+    ? clinic.paystackNextPaymentDate
+    : clinic?.subscriptionEnds;
+
+  if (!resolvedEnds) {
     return false;
   }
 
-  const subscriptionEnd = new Date(clinic.subscriptionEnds);
+  const subscriptionEnd = new Date(resolvedEnds);
   if (Number.isNaN(subscriptionEnd.getTime())) {
     return false;
   }
