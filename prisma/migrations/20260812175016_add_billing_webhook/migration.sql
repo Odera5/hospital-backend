@@ -1,14 +1,14 @@
 -- DropIndex
-DROP INDEX "Appointment_branchId_appointmentDate_idx";
+DROP INDEX IF EXISTS "Appointment_branchId_appointmentDate_idx";
 
 -- DropIndex
-DROP INDEX "Invoice_branchId_idx";
+DROP INDEX IF EXISTS "Invoice_branchId_idx";
 
 -- DropIndex
-DROP INDEX "Record_branchId_idx";
+DROP INDEX IF EXISTS "Record_branchId_idx";
 
 -- DropIndex
-DROP INDEX "WaitingRoom_branchId_status_arrivalTime_idx";
+DROP INDEX IF EXISTS "WaitingRoom_branchId_status_arrivalTime_idx";
 
 -- AlterTable
 ALTER TABLE "Patient" ALTER COLUMN "dateOfBirth" DROP NOT NULL,
