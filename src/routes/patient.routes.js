@@ -172,22 +172,45 @@ const normalizeBoolean = (value) => {
   return Boolean(value);
 };
 
-const normalizeConsentPayload = (payload = {}) => {
+const getConsentClinicianName = (user = {}) => {
+  const displayName = normalizeText(user.name);
+  if (displayName) {
+    return user.role === "doctor" && !/^dr\.?\s/i.test(displayName)
+      ? `Dr. ${displayName}`
+      : displayName;
+  }
+
+  return normalizeText(user.email) || "Current user";
+};
+
+const normalizeConsentPayload = (payload = {}, user = {}, existingRecord = null) => {
   const consentObtained = normalizeBoolean(payload.consentObtained);
-  const consentTakenBy = normalizeText(payload.consentTakenBy);
   const consentNotes = normalizeText(payload.consentNotes);
-  const rawConsentDate = normalizeText(payload.consentDate);
-  const consentDate =
-    consentObtained && rawConsentDate ? new Date(rawConsentDate) : null;
+  const existingConsentDate =
+    existingRecord?.consentObtained && existingRecord?.consentDate
+      ? new Date(existingRecord.consentDate)
+      : null;
+  const existingConsentTakenBy =
+    existingRecord?.consentObtained && normalizeText(existingRecord.consentTakenBy);
+  const shouldPreserveExistingConsent =
+    consentObtained &&
+    existingConsentDate &&
+    !Number.isNaN(existingConsentDate.getTime()) &&
+    existingConsentTakenBy;
 
   return {
     consentObtained,
-    consentTakenBy: consentObtained ? consentTakenBy : "",
+    consentTakenBy: consentObtained
+      ? shouldPreserveExistingConsent
+        ? existingConsentTakenBy
+        : getConsentClinicianName(user)
+      : "",
     consentNotes: consentObtained ? consentNotes : "",
-    consentDate:
-      consentObtained && consentDate && !Number.isNaN(consentDate.getTime())
-        ? consentDate
-        : null,
+    consentDate: consentObtained
+      ? shouldPreserveExistingConsent
+        ? existingConsentDate
+        : new Date()
+      : null,
   };
 };
 
@@ -1237,8 +1260,6 @@ router.post(
         dentition,
         teeth,
         consentObtained,
-        consentDate,
-        consentTakenBy,
         consentNotes,
         vitals,
       } = req.body;
@@ -1255,10 +1276,8 @@ router.post(
 
       const normalizedConsent = normalizeConsentPayload({
         consentObtained,
-        consentDate,
-        consentTakenBy,
         consentNotes,
-      });
+      }, req.user);
 
       const uploadedAttachmentMetadata = normalizeAttachmentMetadataPayload(
         req.body.attachmentsMetadata,
@@ -1372,18 +1391,14 @@ router.put(
         teeth,
         removedAttachments,
         consentObtained,
-        consentDate,
-        consentTakenBy,
         consentNotes,
         vitals,
       } = req.body;
 
       const normalizedConsent = normalizeConsentPayload({
         consentObtained,
-        consentDate,
-        consentTakenBy,
         consentNotes,
-      });
+      }, req.user, record);
 
       const existingAttachments = normalizeAttachments(record.attachments);
       const removedNames = (
