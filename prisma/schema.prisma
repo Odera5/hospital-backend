@@ -8,64 +8,65 @@ datasource db {
 }
 
 model User {
-  id           String        @id @default(cuid())
-  name         String
-  email        String        @unique
-  password     String
-  role         String        @default("nurse")
-  customRoleTitle String?
-  dateOfBirth  String?       @default("")
-  avatarUrl    String?       @default("")
-  clinicId     String
-  assignedBranchIds String[] @default([])
-  isActive     Boolean       @default(true)
-  emailVerified Boolean      @default(false)
-  emailVerificationToken String?
+  id                         String        @id @default(cuid())
+  name                       String
+  email                      String        @unique
+  password                   String
+  role                       String        @default("nurse")
+  customRoleTitle            String?
+  dateOfBirth                String?       @default("")
+  avatarUrl                  String?       @default("")
+  clinicId                   String
+  assignedBranchIds          String[]      @default([])
+  isActive                   Boolean       @default(true)
+  emailVerified              Boolean       @default(false)
+  emailVerificationToken     String?
   emailVerificationExpiresAt DateTime?
-  resetPasswordToken   String?
-  resetPasswordExpiresAt DateTime?
-  refreshToken String?
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  clinic       Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-  appointments Appointment[]
-  auditLogs    AuditLog[]
+  resetPasswordToken         String?
+  resetPasswordExpiresAt     DateTime?
+  refreshToken               String?
+  createdAt                  DateTime      @default(now())
+  updatedAt                  DateTime      @updatedAt
+  clinic                     Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  appointments               Appointment[]
+  auditLogs                  AuditLog[]
 
   @@index([clinicId, role])
 }
 
 model Patient {
-  id             String        @id @default(cuid())
-  clinicId       String
-  branchId       String
-  cardNumberSequence Int?
-  name           String
-  searchName     String?
-  cardNumber     String        @default("")
-  searchCardNumber String?
-  age            String
-  ageNumber      Int?
-  dateOfBirth    String?       @default("")
-  lastBirthdayGreetingYear Int? @default(0)
-  email          String        @default("")
-  gender         String        @default("other")
-  phone          String        @default("")
-  address        String        @default("")
-  nextOfKinName  String        @default("")
-  nextOfKinPhone String        @default("")
-  nextOfKinRelationship String @default("")
-  nextOfKinAddress String      @default("")
-  isDeleted      Boolean       @default(false)
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
-  clinic         Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-  branch         Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  records        Record[]
-  appointments   Appointment[]
-  waitingEntries WaitingRoom[]
-  invoices       Invoice[]
-  auditLogs      AuditLog[]
+  id                       String        @id @default(cuid())
+  clinicId                 String
+  branchId                 String
+  cardNumberSequence       Int?
+  name                     String
+  searchName               String?
+  cardNumber               String        @default("")
+  searchCardNumber         String?
+  age                      String
+  ageNumber                Int?
+  dateOfBirth              String?       @default("")
+  lastBirthdayGreetingYear Int?          @default(0)
+  email                    String        @default("")
+  gender                   String        @default("other")
+  phone                    String        @default("")
+  address                  String        @default("")
+  nextOfKinName            String        @default("")
+  nextOfKinPhone           String        @default("")
+  nextOfKinRelationship    String        @default("")
+  nextOfKinAddress         String        @default("")
+  isDeleted                Boolean       @default(false)
+  createdAt                DateTime      @default(now())
+  updatedAt                DateTime      @updatedAt
+  clinic                   Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  branch                   Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  records                  Record[]
+  appointments             Appointment[]
+  waitingEntries           WaitingRoom[]
+  invoices                 Invoice[]
+  auditLogs                AuditLog[]
 
+  @@unique([clinicId, cardNumberSequence])
   @@index([clinicId, createdAt])
   @@index([branchId, createdAt])
   @@index([clinicId, isDeleted])
@@ -76,164 +77,164 @@ model Patient {
   @@index([branchId, isDeleted, searchCardNumber])
   @@index([clinicId, isDeleted, ageNumber])
   @@index([branchId, isDeleted, ageNumber])
-  @@unique([clinicId, cardNumberSequence])
 }
 
 model PendingIntake {
-  id             String    @id @default(cuid())
-  clinicId       String
-  branchId       String
-  name           String
-  age            String
-  dateOfBirth    String?   @default("")
-  gender         String    @default("other")
-  phone          String    @default("")
-  email          String    @default("")
-  address        String    @default("")
-  nextOfKinName  String    @default("")
-  nextOfKinPhone String    @default("")
-  nextOfKinRelationship String @default("")
-  nextOfKinAddress String    @default("")
-  preferredDate  DateTime?
-  preferredTime  String    @default("")
-  status         String    @default("pending") // pending, approved, rejected
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  clinic         Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-  branch         Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  id                    String    @id @default(cuid())
+  clinicId              String
+  branchId              String
+  name                  String
+  age                   String
+  dateOfBirth           String?   @default("")
+  gender                String    @default("other")
+  phone                 String    @default("")
+  email                 String    @default("")
+  address               String    @default("")
+  nextOfKinName         String    @default("")
+  nextOfKinPhone        String    @default("")
+  nextOfKinRelationship String    @default("")
+  nextOfKinAddress      String    @default("")
+  preferredDate         DateTime?
+  preferredTime         String    @default("")
+  status                String    @default("pending") // pending, approved, rejected
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  clinic                Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  branch                Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
 
   @@index([clinicId, status, createdAt])
   @@index([branchId, status, createdAt])
 }
 
 model Clinic {
-  id             String    @id @default(cuid())
-  name           String
-  email          String    @unique
-  phone          String    @default("")
-  country        String    @default("")
-  city           String    @default("")
-  address        String    @default("")
-  contactPerson  String    @default("")
-  procedurePresetPrices Json @default("[]")
-  isActive       Boolean   @default(true)
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  users          User[]
-  branches       Branch[]
-  patients       Patient[]
-  pendingIntakes PendingIntake[]
-  plan           PlanType  @default(PRO)
-  logoUrl        String?
-  brandColor     String?
-  intakeEnabled  Boolean   @default(false)
-  intakePublicToken String? @unique
-  reminderOffsets Int[]     @default([1440, 120])
-  stripeCustomerId String?
-  paystackCustomerCode String?
-  paystackPlanCode String?
-  paystackSubscriptionCode String?
-  paystackSubscriptionStatus String?
+  id                             String                @id @default(cuid())
+  name                           String
+  email                          String                @unique
+  phone                          String                @default("")
+  country                        String                @default("")
+  city                           String                @default("")
+  address                        String                @default("")
+  contactPerson                  String                @default("")
+  procedurePresetPrices          Json                  @default("[]")
+  isActive                       Boolean               @default(true)
+  createdAt                      DateTime              @default(now())
+  updatedAt                      DateTime              @updatedAt
+  users                          User[]
+  branches                       Branch[]
+  patients                       Patient[]
+  pendingIntakes                 PendingIntake[]
+  plan                           PlanType              @default(PRO)
+  logoUrl                        String?
+  brandColor                     String?
+  intakeEnabled                  Boolean               @default(false)
+  intakePublicToken              String?               @unique
+  reminderOffsets                Int[]                 @default([1440, 120])
+  stripeCustomerId               String?
+  paystackCustomerCode           String?
+  paystackPlanCode               String?
+  paystackSubscriptionCode       String?
+  paystackSubscriptionStatus     String?
   paystackSubscriptionEmailToken String?
-  paystackAuthorizationCode String?
-  paystackLastReference String?
-  paystackNextPaymentDate DateTime?
-  subscriptionEnds DateTime?
+  paystackAuthorizationCode      String?
+  paystackLastReference          String?
+  paystackNextPaymentDate        DateTime?
+  subscriptionEnds               DateTime?
+  subscriptionHistory            SubscriptionHistory[]
 }
 
 model Branch {
-  id        String   @id @default(cuid())
-  clinicId  String
-  name      String
-  slug      String
-  country   String   @default("")
-  city      String   @default("")
-  area      String   @default("")
-  address   String   @default("")
-  phone     String   @default("")
-  isActive  Boolean  @default(true)
-  isPrimary Boolean  @default(false)
-  intakeEnabled Boolean @default(false)
-  intakePublicToken String? @unique
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  clinic     Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-  patients   Patient[]
-  pendingIntakes PendingIntake[]
-  records    Record[]
-  appointments Appointment[]
-  waitingEntries WaitingRoom[]
-  invoices   Invoice[]
+  id                String          @id @default(cuid())
+  clinicId          String
+  name              String
+  slug              String
+  country           String          @default("")
+  city              String          @default("")
+  area              String          @default("")
+  address           String          @default("")
+  phone             String          @default("")
+  isActive          Boolean         @default(true)
+  isPrimary         Boolean         @default(false)
+  intakeEnabled     Boolean         @default(false)
+  intakePublicToken String?         @unique
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  clinic            Clinic          @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patients          Patient[]
+  pendingIntakes    PendingIntake[]
+  records           Record[]
+  appointments      Appointment[]
+  waitingEntries    WaitingRoom[]
+  invoices          Invoice[]
 
   @@unique([clinicId, slug])
   @@index([clinicId, isActive, createdAt])
 }
 
 model Record {
-  id                    String   @id @default(cuid())
-  patientId             String
-  presentingComplaint   String
-  history               String   @default("")
-  examination           String   @default("")
-  examinationExtraOral  String   @default("")
-  softTissue            String   @default("")
-  periodontalStatus     String   @default("")
-  occlusion             String   @default("")
-  investigation         String   @default("")
-  diagnosis             String   @default("")
-  treatmentPlan         String   @default("")
-  medication            String   @default("")
-  allergies             String   @default("")
-  comorbidities         String   @default("")
-  currentMedication     String   @default("")
-  consentObtained       Boolean  @default(false)
-  consentDate           DateTime?
-  consentTakenBy        String   @default("")
-  consentNotes          String   @default("")
-  dentition             String   @default("adult")
-  teeth                 Json     @default("[]")
-  vitals                Json     @default("{}")
-  attachments           Json     @default("[]")
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-  isDeleted             Boolean  @default(false)
-  deletedAt             DateTime?
-  branchId              String?
-  patient               Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  branch                Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  id                   String    @id @default(cuid())
+  patientId            String
+  presentingComplaint  String
+  history              String    @default("")
+  examination          String    @default("")
+  examinationExtraOral String    @default("")
+  softTissue           String    @default("")
+  periodontalStatus    String    @default("")
+  occlusion            String    @default("")
+  investigation        String    @default("")
+  diagnosis            String    @default("")
+  treatmentPlan        String    @default("")
+  medication           String    @default("")
+  allergies            String    @default("")
+  comorbidities        String    @default("")
+  currentMedication    String    @default("")
+  consentObtained      Boolean   @default(false)
+  consentDate          DateTime?
+  consentTakenBy       String    @default("")
+  consentNotes         String    @default("")
+  dentition            String    @default("adult")
+  teeth                Json      @default("[]")
+  vitals               Json      @default("{}")
+  attachments          Json      @default("[]")
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  isDeleted            Boolean   @default(false)
+  deletedAt            DateTime?
+  branchId             String?
+  patient              Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  branch               Branch?   @relation(fields: [branchId], references: [id], onDelete: SetNull)
 
   @@index([patientId, createdAt])
 }
 
 model Appointment {
-  id              String   @id @default(cuid())
-  patientId       String
-  appointmentDate DateTime
-  timeSlot        String
-  duration        Int      @default(30)
-  appointmentType String   @default("checkup")
-  dentistId       String?
-  notes           String   @default("")
-  status          String   @default("scheduled")
-  reminderEnabled Boolean  @default(false)
-  reminderStatus  String   @default("disabled")
-  remindersSent   Json     @default("[]")
-  reminderLastSentAt DateTime?
-  reminderLastError String  @default("")
-  patientConfirmationStatus String @default("pending")
+  id                             String    @id @default(cuid())
+  patientId                      String
+  appointmentDate                DateTime
+  timeSlot                       String
+  duration                       Int       @default(30)
+  appointmentType                String    @default("checkup")
+  dentistId                      String?
+  notes                          String    @default("")
+  status                         String    @default("scheduled")
+  reminderEnabled                Boolean   @default(false)
+  reminderStatus                 String    @default("disabled")
+  remindersSent                  Json      @default("[]")
+  reminderLastSentAt             DateTime?
+  reminderLastError              String    @default("")
+  patientConfirmationStatus      String    @default("pending")
   patientConfirmationRespondedAt DateTime?
   patientRequestedRescheduleDate DateTime?
   patientRequestedRescheduleTime String?
-  patientRequestedRescheduleNote String @default("")
-  patientRequestedRescheduleAt DateTime?
-  patientResponseToken String @unique
+  patientRequestedRescheduleNote String    @default("")
+  patientRequestedRescheduleAt   DateTime?
+  patientResponseToken           String    @unique
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  branchId        String?
-  patient         Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  dentist         User?    @relation(fields: [dentistId], references: [id], onDelete: SetNull)
-  branch          Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  branchId  String?
+  patient   Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  dentist   User?    @relation(fields: [dentistId], references: [id], onDelete: SetNull)
+  branch    Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
 
   @@index([patientId, appointmentDate])
   @@index([dentistId, appointmentDate])
@@ -241,49 +242,49 @@ model Appointment {
 }
 
 model WaitingRoom {
-  id                    String   @id @default(cuid())
+  id                    String    @id @default(cuid())
   patientId             String
   patientName           String
-  priority              String   @default("normal")
-  status                String   @default("waiting")
-  notes                 String   @default("")
-  arrivalTime           DateTime @default(now())
+  priority              String    @default("normal")
+  status                String    @default("waiting")
+  notes                 String    @default("")
+  arrivalTime           DateTime  @default(now())
   calledAt              DateTime?
   consultationStartedAt DateTime?
   completedAt           DateTime?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
   branchId              String?
-  patient               Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  branch                Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  patient               Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  branch                Branch?   @relation(fields: [branchId], references: [id], onDelete: SetNull)
 
   @@index([status, arrivalTime])
 }
 
 model Invoice {
-  id             String   @id @default(cuid())
-  invoiceNumber  String   @unique
-  patientId      String
+  id              String    @id @default(cuid())
+  invoiceNumber   String    @unique
+  patientId       String
   treatmentPlanId String?
-  invoiceDate    DateTime @default(now())
-  dueDate        DateTime?
-  items          Json     @default("[]")
-  payments       Json     @default("[]")
-  subtotal       Float    @default(0)
-  tax            Float    @default(0)
-  taxPercentage  Float    @default(0)
-  discount       Float    @default(0)
-  total          Float    @default(0)
-  amountPaid     Float    @default(0)
-  balance        Float    @default(0)
-  status         String   @default("draft")
-  paymentMethod  String   @default("pending")
-  notes          String   @default("")
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  branchId       String?
-  patient        Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  branch         Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  invoiceDate     DateTime  @default(now())
+  dueDate         DateTime?
+  items           Json      @default("[]")
+  payments        Json      @default("[]")
+  subtotal        Float     @default(0)
+  tax             Float     @default(0)
+  taxPercentage   Float     @default(0)
+  discount        Float     @default(0)
+  total           Float     @default(0)
+  amountPaid      Float     @default(0)
+  balance         Float     @default(0)
+  status          String    @default("draft")
+  paymentMethod   String    @default("pending")
+  notes           String    @default("")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  branchId        String?
+  patient         Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  branch          Branch?   @relation(fields: [branchId], references: [id], onDelete: SetNull)
 
   @@index([patientId])
   @@index([status])
@@ -309,15 +310,15 @@ model AuditLog {
 }
 
 model BillingWebhook {
-  id           String   @id
-  eventType    String   @default("")
-  payload      Json     @default("{}")
-  signature    String?
-  processed    Boolean  @default(false)
-  attempts     Int      @default(0)
-  lastError    String?
-  processedAt  DateTime?
-  receivedAt   DateTime @default(now())
+  id          String    @id
+  eventType   String    @default("")
+  payload     Json      @default("{}")
+  signature   String?
+  processed   Boolean   @default(false)
+  attempts    Int       @default(0)
+  lastError   String?
+  processedAt DateTime?
+  receivedAt  DateTime  @default(now())
 
   @@index([processed])
 }
@@ -329,21 +330,21 @@ enum PlanType {
 }
 
 model SubscriptionHistory {
-  id             String    @id @default(cuid())
-  clinicId       String
-  actorId        String?
-  fromPlan       PlanType
-  toPlan         PlanType
-  fromInterval   String
-  toInterval     String
-  amount         Float
-  prorationCredit Float   @default(0)
+  id                String   @id @default(cuid())
+  clinicId          String
+  actorId           String?
+  fromPlan          PlanType
+  toPlan            PlanType
+  fromInterval      String
+  toInterval        String
+  amount            Float
+  prorationCredit   Float    @default(0)
   paystackReference String?
-  status         String    @default("pending")
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  status            String   @default("pending")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  clinic         Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
 
   @@index([clinicId])
 }
