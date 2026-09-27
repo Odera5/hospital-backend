@@ -12,7 +12,9 @@
     "test:paystack": "node tests/run-paystack-tests.mjs",
     "jobs:process-webhooks": "node src/jobs/processBillingWebhooks.js",
     "worker:webhooks": "node src/workers/webhookWorker.js",
-    "migrate:mongo": "node src/scripts/migrateMongoToPostgres.js"
+    "migrate:mongo": "node src/scripts/migrateMongoToPostgres.js",
+    "cleanup:unverified": "node scripts/cleanup_unverified_clinics.js",
+    "clinic:deactivate": "node deactivate_clinic.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1036.0",

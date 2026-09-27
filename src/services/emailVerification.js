@@ -379,6 +379,169 @@ export const sendBirthdayGreetingEmail = async ({ email, name, clinicName }) => 
   });
 };
 
+export const sendAdminNewClinicAlert = async ({ clinic, adminUser, ipAddress }) => {
+  const adminNotificationEmail =
+    process.env.ADMIN_NOTIFICATION_EMAIL?.trim() || "primuxcare@gmail.com";
+
+  const recipientEmails = adminNotificationEmail
+    .split(",")
+    .map((e) => e.trim())
+    .filter(Boolean);
+
+  if (recipientEmails.length === 0) return;
+
+  const appBaseUrl = getBaseUrl().replace(/\/$/, "");
+  const subject = `🚨 New Clinic Registered: ${clinic.name} (${clinic.city ? `${clinic.city}, ` : ""}${clinic.country || "Global"})`;
+  const formattedDate = new Date().toLocaleString("en-US", {
+    dateStyle: "full",
+    timeStyle: "medium",
+  });
+
+  const text = [
+    "New Clinic Registration Alert - CareChrome",
+    "",
+    "A new clinic environment has just been registered:",
+    `• Clinic Name: ${clinic.name}`,
+    `• Clinic Email: ${clinic.email}`,
+    `• Clinic Phone: ${clinic.phone || "Not provided"}`,
+    `• Location: ${clinic.city ? `${clinic.city}, ` : ""}${clinic.country || "Not provided"}`,
+    `• Address: ${clinic.address || "Not provided"}`,
+    "",
+    "Primary Admin Details:",
+    `• Admin Name: ${adminUser.name}`,
+    `• Admin Email: ${adminUser.email}`,
+    `• Registered IP: ${ipAddress || "Unknown"}`,
+    `• Registration Time: ${formattedDate}`,
+    "",
+    `Sign in to review or manage clinic status: ${appBaseUrl}/login`,
+  ].join("\n");
+
+  const html = `
+      <div style="font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; padding: 40px 20px;">
+        <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; padding: 40px 36px; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+          
+          <div style="display: flex; align-items: center; margin-bottom: 24px;">
+            <div style="display: inline-block; background-color: #ecfdf5; border: 1px solid #a7f3d0; padding: 10px 14px; border-radius: 10px;">
+              <span style="font-size: 20px; vertical-align: middle;">🏥</span>
+              <span style="color: #065f46; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin-left: 6px;">New Clinic Alert</span>
+            </div>
+          </div>
+
+          <h1 style="margin: 0 0 12px; font-size: 22px; font-weight: 800; color: #0f172a; line-height: 1.3;">
+            ${clinic.name} Just Registered
+          </h1>
+          <p style="margin: 0 0 24px; font-size: 15px; color: #475569; line-height: 1.6;">
+            A new clinic account was just initialized on <strong>CareChrome</strong>. Here are the registration details:
+          </p>
+
+          <!-- Clinic Details Box -->
+          <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 20px;">
+            <h2 style="margin: 0 0 14px; font-size: 13px; font-weight: 700; text-transform: uppercase; color: #0f766e; letter-spacing: 0.05em;">
+              Clinic Details
+            </h2>
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px; color: #334155;">
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; width: 35%;">Clinic Name:</td>
+                <td style="padding: 6px 0; font-weight: 600; color: #0f172a;">${clinic.name}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b;">Clinic Email:</td>
+                <td style="padding: 6px 0; font-weight: 600; color: #0f172a;"><a href="mailto:${clinic.email}" style="color: #0f766e; text-decoration: none;">${clinic.email}</a></td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b;">Clinic Phone:</td>
+                <td style="padding: 6px 0;">${clinic.phone || "Not provided"}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b;">Location:</td>
+                <td style="padding: 6px 0;">${clinic.city ? `${clinic.city}, ` : ""}${clinic.country || "Not provided"}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b;">Street Address:</td>
+                <td style="padding: 6px 0;">${clinic.address || "Not provided"}</td>
+              </tr>
+            </table>
+          </div>
+
+          <!-- Admin Contact Box -->
+          <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 24px;">
+            <h2 style="margin: 0 0 14px; font-size: 13px; font-weight: 700; text-transform: uppercase; color: #0f766e; letter-spacing: 0.05em;">
+              Primary Admin Contact
+            </h2>
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px; color: #334155;">
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; width: 35%;">Admin Name:</td>
+                <td style="padding: 6px 0; font-weight: 600; color: #0f172a;">${adminUser.name}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b;">Admin Email:</td>
+                <td style="padding: 6px 0; font-weight: 600; color: #0f172a;"><a href="mailto:${adminUser.email}" style="color: #0f766e; text-decoration: none;">${adminUser.email}</a></td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b;">Registration IP:</td>
+                <td style="padding: 6px 0; font-family: monospace; color: #475569;">${ipAddress || "Unknown"}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b;">Timestamp:</td>
+                <td style="padding: 6px 0; color: #475569;">${formattedDate}</td>
+              </tr>
+            </table>
+          </div>
+
+          <!-- Actions -->
+          <div style="text-align: center; margin: 32px 0 24px;">
+            <a href="${appBaseUrl}/login" style="display: inline-block; background-color: #0f766e; color: #ffffff; text-decoration: none; padding: 14px 28px; border-radius: 10px; font-weight: 600; font-size: 15px; margin-right: 12px;">
+              Open CareChrome Portal
+            </a>
+          </div>
+
+          <p style="margin: 0; font-size: 12px; color: #94a3b8; text-align: center; line-height: 1.5;">
+            Tip: If this is an unauthorized or suspicious test account, you can quickly deactivate this clinic using the admin panel or CLI tool: <code>node deactivate_clinic.js ${clinic.email}</code>
+          </p>
+
+          <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 28px 0 20px;">
+          <div style="text-align: center; color: #94a3b8; font-size: 12px;">
+            <p style="margin: 0;">Primux Care • CareChrome Security System</p>
+          </div>
+        </div>
+      </div>
+    `;
+
+  if (isResendConfigured()) {
+    const response = await fetch(RESEND_API_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: `CareChrome Security <${getSenderEmail()}>`,
+        to: recipientEmails,
+        subject,
+        text,
+        html,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      const error = new Error(`Resend API error: ${response.status} ${errorText}`);
+      error.code = "RESEND_API_ERROR";
+      throw error;
+    }
+
+    return;
+  }
+
+  await getTransporter().sendMail({
+    from: `"CareChrome Security" <${getSenderEmail()}>`,
+    to: recipientEmails.join(", "),
+    subject,
+    text,
+    html,
+  });
+};
+
 export const getVerificationErrorMessage = (error) => {
   if (
     error?.message?.includes("SMTP is not configured") ||

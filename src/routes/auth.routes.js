@@ -16,10 +16,12 @@ import {
   createEmailVerification,
   getVerificationErrorMessage,
   sendVerificationEmail,
+  sendAdminNewClinicAlert,
   generateOtp,
   sendDeactivationOtpEmail,
   sendPasswordResetEmail,
 } from "../services/emailVerification.js";
+import { verifyTurnstileToken } from "../utils/turnstile.js";
 import {
   hasActivePaidSubscription,
   hasActiveProAccess,
@@ -855,7 +857,34 @@ router.post(
         adminName,
         adminEmail,
         password,
+        turnstileToken,
+        hp_clinic_website,
       } = req.body;
+
+      // 1. Honeypot check: Bots auto-fill hidden input fields
+      if (hp_clinic_website && String(hp_clinic_website).trim().length > 0) {
+        return res.status(400).json({
+          code: "BOT_DETECTED",
+          message: "Automated registration detected. Submission rejected.",
+        });
+      }
+
+      // 2. Cloudflare Turnstile Verification
+      const clientIp =
+        req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "";
+      const turnstileCheck = await verifyTurnstileToken({
+        token: turnstileToken,
+        ipAddress: clientIp,
+      });
+
+      if (!turnstileCheck.success) {
+        return res.status(400).json({
+          code: "BOT_VERIFICATION_FAILED",
+          message:
+            turnstileCheck.error ||
+            "Security verification check failed. Please refresh and try again.",
+        });
+      }
 
       if (
         !clinicName?.trim() ||
@@ -967,6 +996,15 @@ router.post(
         emailWarning =
           " Clinic account was created, but the verification email could not be sent right now. Please use the resend verification option from the login page after email delivery is configured.";
       }
+
+      // Asynchronously trigger alert to Primux Care admin (primuxcare@gmail.com)
+      sendAdminNewClinicAlert({
+        clinic,
+        adminUser,
+        ipAddress: clientIp,
+      }).catch((adminAlertErr) => {
+        console.error("Admin registration alert email error:", adminAlertErr);
+      });
 
       res.status(201).json({
         message: `Clinic registered successfully.${emailWarning || " A welcome email has been sent to confirm the admin account."}`,

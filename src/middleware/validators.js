@@ -1,4 +1,5 @@
 import { body, query, param, validationResult } from "express-validator";
+import { checkDisposableEmail } from "../utils/disposableEmailBlocker.js";
 
 // =========================
 // Generic Error Handler
@@ -17,12 +18,48 @@ export const handleValidationErrors = (req, res, next) => {
 // =========================
 export const validateClinicRegistration = [
   body("clinicName").trim().notEmpty().withMessage("Clinic name is required"),
-  body("clinicEmail").trim().notEmpty().withMessage("Clinic email is required").isEmail().withMessage("Invalid clinic email address"),
+  body("clinicEmail")
+    .trim()
+    .notEmpty()
+    .withMessage("Clinic email is required")
+    .isEmail()
+    .withMessage("Invalid clinic email address")
+    .custom((value) => {
+      const check = checkDisposableEmail(value);
+      if (check.isDisposable) {
+        throw new Error(
+          "Temporary or disposable email domains are not allowed for clinic registration. Please use a valid clinic or business email."
+        );
+      }
+      return true;
+    }),
   body("clinicCountry").trim().notEmpty().withMessage("Clinic country is required"),
   body("clinicCity").trim().notEmpty().withMessage("Clinic city is required"),
   body("adminName").trim().notEmpty().withMessage("Admin name is required"),
-  body("adminEmail").trim().notEmpty().withMessage("Admin email is required").isEmail().withMessage("Invalid admin email address"),
+  body("adminEmail")
+    .trim()
+    .notEmpty()
+    .withMessage("Admin email is required")
+    .isEmail()
+    .withMessage("Invalid admin email address")
+    .custom((value) => {
+      const check = checkDisposableEmail(value);
+      if (check.isDisposable) {
+        throw new Error(
+          "Temporary or disposable email domains are not allowed. Please use a permanent email address."
+        );
+      }
+      return true;
+    }),
   body("password").notEmpty().withMessage("Password is required").isLength({ min: 6 }).withMessage("Password must be at least 6 characters"),
+  body("hp_clinic_website")
+    .optional()
+    .custom((value) => {
+      if (value && String(value).trim().length > 0) {
+        throw new Error("Automated registration detected. Submission rejected.");
+      }
+      return true;
+    }),
   handleValidationErrors,
 ];
 
