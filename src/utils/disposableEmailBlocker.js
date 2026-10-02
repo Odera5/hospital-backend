@@ -110,6 +110,12 @@ const DISPOSABLE_DOMAINS = new Set([
   "velmi.org",
 ]);
 
+import dns from "dns/promises";
+
+// Cache MX lookup results in-memory for 10 minutes to avoid redundant DNS lookups
+const mxCache = new Map();
+const MX_CACHE_TTL_MS = 10 * 60 * 1000;
+
 /**
  * Checks whether an email address uses a known disposable/temporary email provider.
  * @param {string} email
@@ -143,3 +149,68 @@ export function checkDisposableEmail(email) {
 
   return { isDisposable: false, domain };
 }
+
+/**
+ * Validates an email address against known disposable lists AND checks DNS MX records
+ * to verify that the domain actually has mail servers configured to receive emails.
+ * @param {string} email
+ * @returns {Promise<{ valid: boolean, error?: string, reason?: string }>}
+ */
+export async function validateEmailDomainWithMx(email) {
+  const disposableCheck = checkDisposableEmail(email);
+  if (disposableCheck.isDisposable) {
+    return {
+      valid: false,
+      reason: "disposable",
+      error: "Temporary or disposable email domains are not allowed. Please use a valid clinic or business email.",
+    };
+  }
+
+  const domain = disposableCheck.domain;
+  if (!domain) {
+    return {
+      valid: false,
+      reason: "invalid_format",
+      error: "Invalid email address format.",
+    };
+  }
+
+  // Check cache
+  const cached = mxCache.get(domain);
+  if (cached && Date.now() - cached.timestamp < MX_CACHE_TTL_MS) {
+    return cached.result;
+  }
+
+  try {
+    const records = await dns.resolveMx(domain);
+    if (!records || records.length === 0) {
+      const result = {
+        valid: false,
+        reason: "no_mx",
+        error: `The email domain '@${domain}' does not have active mail servers to receive emails. Please check for typos.`,
+      };
+      mxCache.set(domain, { timestamp: Date.now(), result });
+      return result;
+    }
+
+    const result = { valid: true };
+    mxCache.set(domain, { timestamp: Date.now(), result });
+    return result;
+  } catch (err) {
+    // ENOTFOUND = domain doesn't exist, ENODATA = domain exists but has no MX records
+    if (err.code === "ENOTFOUND" || err.code === "ENODATA") {
+      const result = {
+        valid: false,
+        reason: "no_mx",
+        error: `The email domain '@${domain}' does not exist or cannot receive emails. Please check for typos.`,
+      };
+      mxCache.set(domain, { timestamp: Date.now(), result });
+      return result;
+    }
+
+    // For transient network/timeout errors, do not block legitimate users
+    console.warn(`DNS MX check warning for domain ${domain}:`, err.message);
+    return { valid: true, warning: err.message };
+  }
+}
+

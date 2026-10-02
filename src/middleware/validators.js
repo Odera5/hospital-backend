@@ -1,5 +1,8 @@
 import { body, query, param, validationResult } from "express-validator";
-import { checkDisposableEmail } from "../utils/disposableEmailBlocker.js";
+import {
+  checkDisposableEmail,
+  validateEmailDomainWithMx,
+} from "../utils/disposableEmailBlocker.js";
 
 // =========================
 // Generic Error Handler
@@ -24,12 +27,10 @@ export const validateClinicRegistration = [
     .withMessage("Clinic email is required")
     .isEmail()
     .withMessage("Invalid clinic email address")
-    .custom((value) => {
-      const check = checkDisposableEmail(value);
-      if (check.isDisposable) {
-        throw new Error(
-          "Temporary or disposable email domains are not allowed for clinic registration. Please use a valid clinic or business email."
-        );
+    .custom(async (value) => {
+      const check = await validateEmailDomainWithMx(value);
+      if (!check.valid) {
+        throw new Error(check.error);
       }
       return true;
     }),
@@ -42,12 +43,10 @@ export const validateClinicRegistration = [
     .withMessage("Admin email is required")
     .isEmail()
     .withMessage("Invalid admin email address")
-    .custom((value) => {
-      const check = checkDisposableEmail(value);
-      if (check.isDisposable) {
-        throw new Error(
-          "Temporary or disposable email domains are not allowed. Please use a permanent email address."
-        );
+    .custom(async (value) => {
+      const check = await validateEmailDomainWithMx(value);
+      if (!check.valid) {
+        throw new Error(check.error);
       }
       return true;
     }),

@@ -54,13 +54,17 @@ export async function verifyTurnstileToken({ token, ipAddress }) {
     const data = await response.json();
 
     if (!data.success) {
-      console.warn("Turnstile verification rejected:", data["error-codes"]);
+      console.warn("⚠️ Turnstile verification rejected by Cloudflare:", data["error-codes"]);
       return {
         success: false,
         errorCodes: data["error-codes"] || [],
         error: "Security verification failed. Please refresh the page and try again.",
       };
     }
+
+    console.log(
+      `🛡️ Turnstile verified successfully: host=${data.hostname || "unknown"}, ts=${data.challenge_ts}`
+    );
 
     return {
       success: true,
