@@ -8,10 +8,14 @@ const CLOUDFLARE_SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v
 export async function verifyTurnstileToken({ token, ipAddress }) {
   const secretKey = process.env.CLOUDFLARE_TURNSTILE_SECRET_KEY?.trim();
 
-  // If secret key is not set in the environment, bypass check with a warning (useful for local dev)
+  // In development, allow bypass if key is not configured; in production, fail closed
   if (!secretKey) {
     if (process.env.NODE_ENV === "production") {
-      console.warn("⚠️ CLOUDFLARE_TURNSTILE_SECRET_KEY is not configured in production environment!");
+      console.error("🚨 CLOUDFLARE_TURNSTILE_SECRET_KEY is not configured in production environment!");
+      return {
+        success: false,
+        error: "Security verification is currently misconfigured. Please contact support.",
+      };
     }
     return { success: true, bypassed: true };
   }

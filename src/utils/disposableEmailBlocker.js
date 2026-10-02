@@ -4,6 +4,24 @@
  */
 
 const DISPOSABLE_DOMAINS = new Set([
+  // Generic and throwaway webmail alias networks
+  "mail.com",
+  "email.com",
+  "usa.com",
+  "post.com",
+  "consultant.com",
+  "myself.com",
+  "dr.com",
+  "europe.com",
+  "asia.com",
+  "cheerful.com",
+  "contractor.net",
+  "financier.com",
+  "engineer.com",
+  "techie.com",
+  "writeme.com",
+  "innocent.com",
+
   // Popular temporary email services
   "mailinator.com",
   "mailinator2.com",
