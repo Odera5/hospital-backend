@@ -343,6 +343,8 @@ const buildCustomFields = (clinic) => [
 
 export const serializeBillingClinic = (clinic) => ({
   id: clinic.id,
+  name: clinic.name || "",
+  country: clinic.country || "",
   plan: clinic.plan || "PRO",
   subscriptionEnds: clinic.subscriptionEnds || null,
   stripeCustomerId: clinic.stripeCustomerId || null,
