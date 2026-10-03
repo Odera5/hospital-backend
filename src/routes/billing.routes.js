@@ -9,10 +9,16 @@ import {
   verifyPaystackCheckout,
   verifyPaystackCheckoutPublic,
   upgradeSubscription,
+  initializeStripeCheckout,
+  createStripePortalLink,
+  cancelStripeSubscriptionHandler,
+  verifyStripeCheckout,
 } from "../controllers/billingController.js";
 import {
   validatePaystackInitialization,
   validatePaystackVerify,
+  validateStripeInitialization,
+  validateStripeVerify,
 } from "../middleware/validators.js";
 
 const router = express.Router();
@@ -22,6 +28,11 @@ router.get(
   validatePaystackVerify,
   verifyPaystackCheckoutPublic,
 );
+router.get(
+  "/stripe/verify-public",
+  validateStripeVerify,
+  verifyStripeCheckout,
+);
 
 router.get("/", protect, authorizeRoles("admin"), getBillingOverview);
 router.post(
@@ -30,7 +41,6 @@ router.post(
   authorizeRoles("admin"),
   validatePaystackInitialization,
   initializePaystackCheckout,
-  resumePaystackSubscription,
 );
 router.get(
   "/paystack/manage-link",
@@ -58,6 +68,34 @@ router.post(
   resumePaystackSubscription,
 );
 
+router.post(
+  "/stripe/initialize",
+  protect,
+  authorizeRoles("admin"),
+  validateStripeInitialization,
+  initializeStripeCheckout,
+);
+router.get(
+  "/stripe/portal",
+  protect,
+  authorizeRoles("admin"),
+  createStripePortalLink,
+);
+router.post(
+  "/stripe/cancel",
+  protect,
+  authorizeRoles("admin"),
+  cancelStripeSubscriptionHandler,
+);
+router.get(
+  "/stripe/verify",
+  protect,
+  authorizeRoles("admin"),
+  validateStripeVerify,
+  verifyStripeCheckout,
+);
+
 router.post("/upgrade", protect, authorizeRoles("admin"), upgradeSubscription);
 
 export default router;
+

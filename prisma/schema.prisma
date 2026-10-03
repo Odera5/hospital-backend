@@ -130,6 +130,10 @@ model Clinic {
   intakePublicToken              String?               @unique
   reminderOffsets                Int[]                 @default([1440, 120])
   stripeCustomerId               String?
+  stripeSubscriptionId           String?
+  stripeSubscriptionStatus       String?
+  stripePriceId                  String?
+  stripeNextPaymentDate          DateTime?
   paystackCustomerCode           String?
   paystackPlanCode               String?
   paystackSubscriptionCode       String?

@@ -42,7 +42,12 @@ export const protect = async (req, res, next) => {
         c."isActive" AS "clinicIsActive",
         c."plan" AS "clinicPlan",
         c."subscriptionEnds" AS "clinicSubscriptionEnds",
-        c."paystackSubscriptionStatus" AS "clinicPaystackSubscriptionStatus"
+        c."paystackSubscriptionStatus" AS "clinicPaystackSubscriptionStatus",
+        c."paystackNextPaymentDate" AS "clinicPaystackNextPaymentDate",
+        c."stripeCustomerId" AS "clinicStripeCustomerId",
+        c."stripeSubscriptionId" AS "clinicStripeSubscriptionId",
+        c."stripeSubscriptionStatus" AS "clinicStripeSubscriptionStatus",
+        c."stripeNextPaymentDate" AS "clinicStripeNextPaymentDate"
       FROM "User" u
       INNER JOIN "Clinic" c ON c.id = u."clinicId"
       WHERE u.id = ${decoded.id}
@@ -72,6 +77,11 @@ export const protect = async (req, res, next) => {
       plan: user.clinicPlan || "PRO",
       subscriptionEnds: user.clinicSubscriptionEnds || null,
       paystackSubscriptionStatus: user.clinicPaystackSubscriptionStatus || null,
+      paystackNextPaymentDate: user.clinicPaystackNextPaymentDate || null,
+      stripeCustomerId: user.clinicStripeCustomerId || null,
+      stripeSubscriptionId: user.clinicStripeSubscriptionId || null,
+      stripeSubscriptionStatus: user.clinicStripeSubscriptionStatus || null,
+      stripeNextPaymentDate: user.clinicStripeNextPaymentDate || null,
     };
 
     const branches = await getAllowedActiveBranches({

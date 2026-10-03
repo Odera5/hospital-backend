@@ -171,9 +171,17 @@ export const validatePaystackInitialization = [
   handleValidationErrors,
 ];
 
+export const validateStripeInitialization = validatePaystackInitialization;
+
 export const validatePaystackVerify = [
   query("reference").optional({ checkFalsy: true }).isString().withMessage("Reference must be a string"),
   body("reference").optional({ checkFalsy: true }).isString().withMessage("Reference must be a string"),
+  handleValidationErrors,
+];
+
+export const validateStripeVerify = [
+  query("session_id").optional({ checkFalsy: true }).isString().withMessage("Session ID must be a string"),
+  body("session_id").optional({ checkFalsy: true }).isString().withMessage("Session ID must be a string"),
   handleValidationErrors,
 ];
 

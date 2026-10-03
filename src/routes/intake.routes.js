@@ -41,6 +41,9 @@ const intakeAccessClinicSelect = {
   intakePublicToken: true,
   subscriptionEnds: true,
   paystackSubscriptionStatus: true,
+  paystackNextPaymentDate: true,
+  stripeSubscriptionStatus: true,
+  stripeNextPaymentDate: true,
 };
 
 const getActiveBranchForIntake = async ({ clinicId, branchId = "", accessToken = "" }) =>

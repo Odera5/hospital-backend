@@ -5,40 +5,50 @@ export const ACTIVE_PAYSTACK_SUBSCRIPTION_STATUSES = [
   "non-renewing",
 ];
 
+export const ACTIVE_STRIPE_SUBSCRIPTION_STATUSES = [
+  "active",
+  "trialing",
+  "non-renewing",
+];
+
+export const resolveSubscriptionEndDate = (clinic) => {
+  const dates = [
+    clinic?.subscriptionEnds,
+    clinic?.paystackNextPaymentDate,
+    clinic?.stripeNextPaymentDate,
+  ]
+    .filter(Boolean)
+    .map((d) => new Date(d))
+    .filter((d) => !Number.isNaN(d.getTime()));
+
+  if (dates.length === 0) return null;
+  return new Date(Math.max(...dates.map((d) => d.getTime())));
+};
+
 export const hasActivePaidSubscription = (clinic) => {
-  const hasStatus = ACTIVE_PAYSTACK_SUBSCRIPTION_STATUSES.includes(
+  const hasPaystackStatus = ACTIVE_PAYSTACK_SUBSCRIPTION_STATUSES.includes(
     String(clinic?.paystackSubscriptionStatus || "").toLowerCase(),
   );
-  if (!hasStatus) return false;
 
-  const resolvedEnds = clinic?.paystackNextPaymentDate && new Date(clinic.paystackNextPaymentDate) > new Date(clinic.subscriptionEnds || 0)
-    ? clinic.paystackNextPaymentDate
-    : clinic?.subscriptionEnds;
+  const hasStripeStatus = ACTIVE_STRIPE_SUBSCRIPTION_STATUSES.includes(
+    String(clinic?.stripeSubscriptionStatus || "").toLowerCase(),
+  );
 
+  if (!hasPaystackStatus && !hasStripeStatus) return false;
+
+  const resolvedEnds = resolveSubscriptionEndDate(clinic);
   if (resolvedEnds) {
-    const end = new Date(resolvedEnds);
-    if (!Number.isNaN(end.getTime())) {
-      return end >= new Date();
-    }
+    return resolvedEnds >= new Date();
   }
   return true;
 };
 
 export const hasFutureSubscriptionWindow = (clinic) => {
-  const resolvedEnds = clinic?.paystackNextPaymentDate && new Date(clinic.paystackNextPaymentDate) > new Date(clinic.subscriptionEnds || 0)
-    ? clinic.paystackNextPaymentDate
-    : clinic?.subscriptionEnds;
-
+  const resolvedEnds = resolveSubscriptionEndDate(clinic);
   if (!resolvedEnds) {
     return false;
   }
-
-  const subscriptionEnd = new Date(resolvedEnds);
-  if (Number.isNaN(subscriptionEnd.getTime())) {
-    return false;
-  }
-
-  return subscriptionEnd >= new Date();
+  return resolvedEnds >= new Date();
 };
 
 export const hasActiveProAccess = (clinic) =>

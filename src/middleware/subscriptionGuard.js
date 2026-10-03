@@ -21,6 +21,9 @@ export const requireProOrEnterprise = async (req, res, next) => {
         plan: true,
         subscriptionEnds: true,
         paystackSubscriptionStatus: true,
+        paystackNextPaymentDate: true,
+        stripeSubscriptionStatus: true,
+        stripeNextPaymentDate: true,
       }
     });
 

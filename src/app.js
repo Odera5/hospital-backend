@@ -18,7 +18,10 @@ import branchRoutes from "./routes/branch.routes.js";
 import auditLogRoutes from "./routes/auditLog.routes.js";
 import { apiLimiter } from "./middleware/rateLimit.js";
 import { logger } from "./middleware/logger.js";
-import { handlePaystackWebhook } from "./controllers/billingController.js";
+import {
+  handlePaystackWebhook,
+  handleStripeWebhook,
+} from "./controllers/billingController.js";
 import { prisma } from "./lib/prisma.js";
 
 const app = express();
@@ -71,6 +74,12 @@ app.post(
   "/api/billing/paystack/webhook",
   express.raw({ type: "application/json" }),
   handlePaystackWebhook,
+);
+
+app.post(
+  "/api/billing/stripe/webhook",
+  express.raw({ type: "application/json" }),
+  handleStripeWebhook,
 );
 
 app.use(express.json({ limit: "1mb" }));
