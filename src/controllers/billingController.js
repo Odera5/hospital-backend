@@ -105,6 +105,15 @@ export const initializePaystackCheckout = async (req, res) => {
       return res.status(404).json({ message: "Clinic not found" });
     }
 
+    const country = String(clinic.country || "").trim().toLowerCase();
+    const isNigerian = country === "nigeria" || country === "ng";
+
+    if (!isNigerian && !clinic.paystackSubscriptionCode) {
+      return res.status(403).json({
+        message: "Paystack NGN billing is exclusively for clinics registered in Nigeria. Please use Stripe checkout for international clinics.",
+      });
+    }
+
     const checkout = await initializePaystackSubscription({
       clinic,
       actor: req.user,
@@ -530,6 +539,15 @@ export const initializeStripeCheckout = async (req, res) => {
 
     if (!clinic) {
       return res.status(404).json({ message: "Clinic not found" });
+    }
+
+    const country = String(clinic.country || "").trim().toLowerCase();
+    const isNigerian = country === "nigeria" || country === "ng";
+
+    if (isNigerian && !clinic.stripeSubscriptionId) {
+      return res.status(403).json({
+        message: "Stripe USD billing is for international clinics. Clinics registered in Nigeria are billed in NGN via Paystack.",
+      });
     }
 
     const plan = req.body?.plan || "PRO";
