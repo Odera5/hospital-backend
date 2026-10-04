@@ -11,7 +11,16 @@ import {
   validateLogin,
   validateClinicProfileUpdate,
 } from "../middleware/validators.js";
-import { authLimiter } from "../middleware/rateLimit.js";
+import {
+  loginLimiter,
+  registrationLimiter,
+  staffCreationLimiter,
+  forgotPasswordLimiter,
+  resetPasswordLimiter,
+  resendVerificationLimiter,
+  sensitiveActionLimiter,
+  authLimiter,
+} from "../middleware/rateLimit.js";
 import {
   createEmailVerification,
   getVerificationErrorMessage,
@@ -713,7 +722,7 @@ router.post(
   "/clinic-profile/deactivate/initiate",
   protect,
   authorizeRoles("admin"),
-  authLimiter,
+  sensitiveActionLimiter,
   async (req, res) => {
     try {
       const { password } = req.body;
@@ -791,7 +800,7 @@ router.post(
   "/clinic-profile/deactivate/verify",
   protect,
   authorizeRoles("admin"),
-  authLimiter,
+  sensitiveActionLimiter,
   async (req, res) => {
     try {
       const { otp } = req.body;
@@ -849,7 +858,7 @@ router.post(
 
 router.post(
   "/register-clinic",
-  authLimiter,
+  registrationLimiter,
   validateClinicRegistration,
   async (req, res) => {
     try {
@@ -1029,7 +1038,7 @@ router.post(
   "/signup",
   protect,
   authorizeRoles(...STAFF_MANAGER_ROLES),
-  authLimiter,
+  staffCreationLimiter,
   validateSignup,
   async (req, res) => {
     try {
@@ -1447,7 +1456,7 @@ router.put("/profile", protect, async (req, res) => {
   }
 });
 
-router.post("/login", authLimiter, validateLogin, async (req, res) => {
+router.post("/login", loginLimiter, validateLogin, async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) {
@@ -1601,7 +1610,10 @@ router.get("/verify-email", async (req, res) => {
   }
 });
 
-router.post("/resend-verification", authLimiter, async (req, res) => {
+router.post(
+  "/resend-verification",
+  resendVerificationLimiter,
+  async (req, res) => {
   try {
     const email = String(req.body?.email || "")
       .toLowerCase()
@@ -1751,7 +1763,7 @@ router.post("/logout", async (req, res) => {
   }
 });
 
-router.post("/forgot-password", authLimiter, async (req, res) => {
+router.post("/forgot-password", forgotPasswordLimiter, async (req, res) => {
   try {
     const email = String(req.body?.email || "")
       .toLowerCase()
@@ -1808,7 +1820,7 @@ router.post("/forgot-password", authLimiter, async (req, res) => {
   }
 });
 
-router.post("/reset-password", authLimiter, async (req, res) => {
+router.post("/reset-password", resetPasswordLimiter, async (req, res) => {
   try {
     const { token, newPassword } = req.body;
 
