@@ -672,6 +672,7 @@ export const processPaystackWebhookEvent = async (event) => {
               data: {
                 plan: history.toPlan,
                 subscriptionEnds: newSubscriptionEnds,
+                paystackSubscriptionStatus: "active",
               },
             }),
           ]);
@@ -815,19 +816,47 @@ const chooseRecoverableSubscription = (subscriptions, clinic) => {
       subscription?.subscription_code && subscription?.email_token,
   );
 
+  if (candidates.length === 0) return null;
+
+  // Sort newest first by creation date or id
+  const sorted = [...candidates].sort((a, b) => {
+    const timeA =
+      new Date(a.createdAt || a.created_at || a.paid_at || 0).getTime() ||
+      Number(a.id) ||
+      0;
+    const timeB =
+      new Date(b.createdAt || b.created_at || b.paid_at || 0).getTime() ||
+      Number(b.id) ||
+      0;
+    return timeB - timeA;
+  });
+
+  const getStatus = (s) => String(s?.status || "").toLowerCase().trim();
+
   return (
-    candidates.find(
-      (subscription) =>
-        usableSubscriptionStatuses.includes(
-          String(subscription.status || "").toLowerCase(),
-        ) && subscriptionMatchesClinicPlan(subscription, clinic),
+    // 1. Strictly active matching clinic's current plan (newest)
+    sorted.find(
+      (s) =>
+        getStatus(s) === "active" &&
+        subscriptionMatchesClinicPlan(s, clinic),
     ) ||
-    candidates.find((subscription) =>
-      usableSubscriptionStatuses.includes(
-        String(subscription.status || "").toLowerCase(),
-      ),
+    // 2. Any active subscription (newest)
+    sorted.find((s) => getStatus(s) === "active") ||
+    // 3. Attention status matching plan
+    sorted.find(
+      (s) =>
+        getStatus(s) === "attention" &&
+        subscriptionMatchesClinicPlan(s, clinic),
     ) ||
-    candidates[0] ||
+    // 4. Non-renewing matching plan (only if no active subscription exists anywhere)
+    sorted.find(
+      (s) =>
+        getStatus(s) === "non-renewing" &&
+        subscriptionMatchesClinicPlan(s, clinic),
+    ) ||
+    // 5. Any matching plan
+    sorted.find((s) => subscriptionMatchesClinicPlan(s, clinic)) ||
+    sorted[0] ||
     null
   );
 };
@@ -837,16 +866,35 @@ const applyRecoveredSubscription = async (clinic, subscription) => {
     return clinic;
   }
 
+  const subscriptionStatus = String(subscription.status || "").toLowerCase().trim();
+  const currentStatus = String(clinic.paystackSubscriptionStatus || "").toLowerCase().trim();
+
+  // Never downgrade an active clinic subscription to "non-renewing" from an older candidate
+  const finalStatus =
+    currentStatus === "active" && subscriptionStatus === "non-renewing"
+      ? "active"
+      : subscription.status || clinic.paystackSubscriptionStatus || "active";
+
+  const nextPaymentDate = subscription.next_payment_date
+    ? new Date(subscription.next_payment_date)
+    : clinic.paystackNextPaymentDate;
+
+  let effectiveSubscriptionEnds = clinic.subscriptionEnds;
+  if (
+    nextPaymentDate &&
+    (!effectiveSubscriptionEnds || new Date(nextPaymentDate) > new Date(effectiveSubscriptionEnds))
+  ) {
+    effectiveSubscriptionEnds = nextPaymentDate;
+  }
+
   return prisma.clinic.update({
     where: { id: clinic.id },
     data: {
       paystackSubscriptionCode: subscription.subscription_code,
       paystackSubscriptionEmailToken: subscription.email_token,
-      paystackSubscriptionStatus:
-        subscription.status || clinic.paystackSubscriptionStatus,
-      paystackNextPaymentDate: subscription.next_payment_date
-        ? new Date(subscription.next_payment_date)
-        : clinic.paystackNextPaymentDate,
+      paystackSubscriptionStatus: finalStatus,
+      paystackNextPaymentDate: nextPaymentDate,
+      subscriptionEnds: effectiveSubscriptionEnds,
     },
   });
 };
@@ -922,9 +970,10 @@ export const recoverClinicPaystackSubscription = async (
     }
   }
 
-  for (const subscriptions of subscriptionSources) {
+  const allSubscriptions = subscriptionSources.flat();
+  if (allSubscriptions.length > 0) {
     const subscription = chooseRecoverableSubscription(
-      subscriptions,
+      allSubscriptions,
       recoveredClinic,
     );
     if (subscription) {
@@ -932,7 +981,6 @@ export const recoverClinicPaystackSubscription = async (
         recoveredClinic,
         subscription,
       );
-      break;
     }
   }
 

@@ -160,7 +160,14 @@ export async function verifyStripeCheckoutSession(sessionId) {
 
     if (clinicId && session.subscription) {
       const subscription = await stripe.subscriptions.retrieve(session.subscription);
-      const periodEnd = new Date(subscription.current_period_end * 1000);
+      const clinic = await prisma.clinic.findUnique({ where: { id: clinicId } });
+      const now = new Date();
+      let periodEnd = new Date(subscription.current_period_end * 1000);
+
+      if (clinic?.subscriptionEnds && new Date(clinic.subscriptionEnds) > now) {
+        const remainingDaysMs = new Date(clinic.subscriptionEnds).getTime() - now.getTime();
+        periodEnd = new Date(periodEnd.getTime() + remainingDaysMs);
+      }
 
       const updatedClinic = await prisma.clinic.update({
         where: { id: clinicId },
@@ -169,7 +176,7 @@ export async function verifyStripeCheckoutSession(sessionId) {
           stripeCustomerId: typeof session.customer === "string" ? session.customer : session.customer?.id,
           stripeSubscriptionId: session.subscription,
           stripeSubscriptionStatus: "active",
-          stripeNextPaymentDate: periodEnd,
+          stripeNextPaymentDate: new Date(subscription.current_period_end * 1000),
           subscriptionEnds: periodEnd,
         },
       });
@@ -244,7 +251,14 @@ export async function handleStripeWebhookEvent({ rawBody, signature }) {
 
       if (clinicId && session.subscription) {
         const subscription = await stripe.subscriptions.retrieve(session.subscription);
-        const periodEnd = new Date(subscription.current_period_end * 1000);
+        const clinic = await prisma.clinic.findUnique({ where: { id: clinicId } });
+        const now = new Date();
+        let periodEnd = new Date(subscription.current_period_end * 1000);
+
+        if (clinic?.subscriptionEnds && new Date(clinic.subscriptionEnds) > now) {
+          const remainingDaysMs = new Date(clinic.subscriptionEnds).getTime() - now.getTime();
+          periodEnd = new Date(periodEnd.getTime() + remainingDaysMs);
+        }
 
         await prisma.clinic.update({
           where: { id: clinicId },
@@ -253,7 +267,7 @@ export async function handleStripeWebhookEvent({ rawBody, signature }) {
             stripeCustomerId: session.customer,
             stripeSubscriptionId: session.subscription,
             stripeSubscriptionStatus: "active",
-            stripeNextPaymentDate: periodEnd,
+            stripeNextPaymentDate: new Date(subscription.current_period_end * 1000),
             subscriptionEnds: periodEnd,
           },
         });
