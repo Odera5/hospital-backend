@@ -1,169 +1,372 @@
-import rateLimit from "express-rate-limit";
+import crypto from "crypto";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import { prisma } from "../lib/prisma.js";
 
-const isProduction = process.env.NODE_ENV === "production";
+const isProduction = String(process.env.NODE_ENV || "").trim() === "production";
+let cleanupTimer;
+
+const incrementCounter = async (key, windowMs) => {
+  const [counter] = await prisma.$queryRaw`
+    INSERT INTO "RateLimitCounter" ("key", "hits", "resetAt")
+    VALUES (${key}, 1, NOW() + (${windowMs} * INTERVAL '1 millisecond'))
+    ON CONFLICT ("key") DO UPDATE
+    SET
+      "hits" = CASE
+        WHEN "RateLimitCounter"."resetAt" <= NOW() THEN 1
+        ELSE "RateLimitCounter"."hits" + 1
+      END,
+      "resetAt" = CASE
+        WHEN "RateLimitCounter"."resetAt" <= NOW()
+          THEN NOW() + (${windowMs} * INTERVAL '1 millisecond')
+        ELSE "RateLimitCounter"."resetAt"
+      END
+    RETURNING "hits", "resetAt"
+  `;
+
+  return {
+    totalHits: Number(counter.hits),
+    resetTime: counter.resetAt,
+  };
+};
+
+class PostgresRateLimitStore {
+  constructor(id, windowMs) {
+    this.prefix = `bhf:ratelimit:${id}:`;
+    this.windowMs = windowMs;
+    this.localKeys = false;
+  }
+
+  async increment(key) {
+    return incrementCounter(`${this.prefix}${key}`, this.windowMs);
+  }
+
+  async decrement(key) {
+    await prisma.$executeRaw`
+      UPDATE "RateLimitCounter"
+      SET "hits" = GREATEST("hits" - 1, 0)
+      WHERE "key" = ${`${this.prefix}${key}`}
+    `;
+  }
+
+  async resetKey(key) {
+    await prisma.$executeRaw`
+      DELETE FROM "RateLimitCounter"
+      WHERE "key" = ${`${this.prefix}${key}`}
+    `;
+  }
+
+  async get(key) {
+    const [counter] = await prisma.$queryRaw`
+      SELECT "hits", "resetAt"
+      FROM "RateLimitCounter"
+      WHERE "key" = ${`${this.prefix}${key}`}
+        AND "resetAt" > NOW()
+    `;
+
+    if (!counter) {
+      return undefined;
+    }
+
+    return {
+      totalHits: Number(counter.hits),
+      resetTime: counter.resetAt,
+    };
+  }
+}
+
+export const startRateLimitCleanup = () => {
+  if (!isProduction || cleanupTimer) {
+    return;
+  }
+
+  const cleanupExpiredCounters = async () => {
+    try {
+      await prisma.$executeRaw`
+        DELETE FROM "RateLimitCounter"
+        WHERE "resetAt" < NOW() - INTERVAL '1 day'
+      `;
+    } catch (error) {
+      console.error("Failed to clean up expired rate-limit counters:", error);
+    }
+  };
+
+  void cleanupExpiredCounters();
+  cleanupTimer = setInterval(cleanupExpiredCounters, 60 * 60 * 1000);
+  cleanupTimer.unref();
+};
+
+export const stopRateLimitCleanup = () => {
+  if (cleanupTimer) {
+    clearInterval(cleanupTimer);
+    cleanupTimer = undefined;
+  }
+};
+
+const getEmailKey = (req) => {
+  const email = String(
+    req.body?.email || req.body?.adminEmail || req.body?.clinicEmail || "",
+  )
+    .trim()
+    .toLowerCase();
+
+  if (!email) {
+    return `ip:${ipKeyGenerator(req.ip || req.socket?.remoteAddress || "unknown")}`;
+  }
+
+  return `email:${crypto.createHash("sha256").update(email).digest("hex")}`;
+};
+
+const getResetTokenKey = (req) => {
+  const token = String(req.body?.token || "").trim();
+
+  if (!token) {
+    return `ip:${ipKeyGenerator(req.ip || req.socket?.remoteAddress || "unknown")}`;
+  }
+
+  return `reset:${crypto.createHash("sha256").update(token).digest("hex")}`;
+};
+
+const getUserKey = (req) => `user:${req.user?.id || "anonymous"}`;
+
+const createStore = (id, windowMs) => {
+  if (!isProduction) {
+    return undefined;
+  }
+
+  return new PostgresRateLimitStore(id, windowMs);
+};
+
+export const canSendNewClinicAdminAlert = async () => {
+  if (!isProduction) {
+    return true;
+  }
+
+  const { totalHits } = await incrementCounter(
+    "bhf:email-budget:new-clinic-admin-alerts",
+    60 * 60 * 1000,
+  );
+
+  return totalHits <= 10;
+};
+
+const createLimiter = ({
+  id,
+  windowMs,
+  max,
+  message,
+  skipSuccessfulRequests = false,
+  keyGenerator,
+}) =>
+  rateLimit({
+    windowMs,
+    max,
+    skipSuccessfulRequests,
+    ...(keyGenerator ? { keyGenerator } : {}),
+    ...(isProduction ? { store: createStore(id, windowMs) } : {}),
+    message: { message },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
+const createIpAndTargetLimiters = ({
+  id,
+  windowMs,
+  ipMax,
+  targetMax,
+  message,
+  targetKey,
+}) => [
+  createLimiter({ id: `${id}-ip`, windowMs, max: ipMax, message }),
+  createLimiter({
+    id: `${id}-target`,
+    windowMs,
+    max: targetMax,
+    message,
+    keyGenerator: targetKey,
+  }),
+];
 
 /**
- * 1. Global API Limiter
- * Applied across all `/api` routes in app.js.
- * Protects server resources from abuse/DDoS while providing generous headroom
- * for Single Page Application (SPA) dashboard navigation and concurrent calls.
- *
- * Production: 1,000 requests per 15 minutes (~66 req/min)
- * Development: 10,000 requests per 15 minutes
+ * Global API limiter. express-rate-limit keys by req.ip, including IPv6 handling.
  */
-export const apiLimiter = rateLimit({
+export const apiLimiter = createLimiter({
+  id: "api",
   windowMs: 15 * 60 * 1000,
-  max: isProduction ? 1000 : 10000,
-  message: {
-    message: isProduction
-      ? "Too many requests from this IP, please try again later."
-      : "Too many development requests. Please wait a moment and try again.",
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
+  max: isProduction ? 1000 : 2500,
+  message: isProduction
+    ? "Too many requests from this IP, please try again later."
+    : "Too many development requests. Please wait a moment and try again.",
 });
 
 /**
- * 2. Login Limiter
- * Applied to POST /api/auth/login.
- * Protects against credential stuffing and brute-forcing (OWASP).
- * Crucially, only failed attempts (4xx/5xx) are counted (`skipSuccessfulRequests: true`).
- * Legitimate users who log in successfully are not penalized or locked out.
- *
- * Production: 10 failed attempts per 15 minutes
- * Development: 100 failed attempts per 15 minutes
+ * Bound authenticated API traffic per account as well as by source IP.
+ * This middleware is invoked after `protect` identifies the user.
  */
-export const loginLimiter = rateLimit({
+export const authenticatedApiLimiter = createLimiter({
+  id: "authenticated-api-user",
   windowMs: 15 * 60 * 1000,
-  max: isProduction ? 10 : 100,
-  skipSuccessfulRequests: true,
-  message: {
+  max: isProduction ? 1500 : 3000,
+  message: "Too many API requests for this account. Please try again later.",
+  keyGenerator: getUserKey,
+});
+
+/**
+ * Login limits apply independently to the source IP and normalized email.
+ * Failed attempts only count toward either limit.
+ */
+export const loginLimiter = [
+  createLimiter({
+    id: "login-ip",
+    windowMs: 15 * 60 * 1000,
+    max: isProduction ? 30 : 100,
+    skipSuccessfulRequests: true,
     message:
-      "Too many failed login attempts from this IP. Please try again after 15 minutes.",
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+      "Too many failed login attempts. Please wait 15 minutes before trying again.",
+  }),
+  createLimiter({
+    id: "login-email",
+    windowMs: 15 * 60 * 1000,
+    max: isProduction ? 8 : 25,
+    skipSuccessfulRequests: true,
+    message:
+      "Too many failed login attempts for this account. Please wait 15 minutes before trying again.",
+    keyGenerator: getEmailKey,
+  }),
+];
 
 /**
- * 3. Clinic Registration Limiter
- * Applied to POST /api/auth/register-clinic.
- * Prevents automated mass-registration spam.
- * Works alongside Cloudflare Turnstile CAPTCHA and honeypot traps.
- *
- * Production: 5 registration requests per 1 hour
- * Development: 50 requests per 1 hour
+ * Registration has independent IP and admin-email limits because it creates
+ * accounts and sends verification and alert emails.
  */
-export const registrationLimiter = rateLimit({
+export const registrationLimiter = createIpAndTargetLimiters({
+  id: "registration",
   windowMs: 60 * 60 * 1000,
-  max: isProduction ? 5 : 50,
-  message: {
-    message:
-      "Too many account registration attempts from this IP. Please try again later.",
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
+  ipMax: isProduction ? 3 : 10,
+  targetMax: isProduction ? 3 : 10,
+  message: "Too many account registration attempts. Please try again later.",
+  targetKey: getEmailKey,
 });
 
 /**
- * 4. Staff Account Creation Limiter
- * Applied to POST /api/auth/signup (authenticated admin/manager onboarding staff).
- * Allows clinic admins to batch-create multiple staff accounts (doctors, nurses)
- * during clinic onboarding without getting prematurely locked out.
- *
- * Production: 30 account creations per 15 minutes
- * Development: 100 requests per 15 minutes
+ * Shared recipient budget across registration, password reset, and verification
+ * email routes prevents switching endpoints to evade the per-address limit.
  */
-export const staffCreationLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: isProduction ? 30 : 100,
-  message: {
+export const emailRecipientLimiter = createLimiter({
+  id: "email-recipient",
+  windowMs: 60 * 60 * 1000,
+  max: isProduction ? 5 : 15,
+  message: "Too many email requests for this address. Please try again later.",
+  keyGenerator: getEmailKey,
+});
+
+/**
+ * Staff account creation is bounded per source IP and authenticated actor.
+ */
+export const staffCreationLimiter = [
+  createLimiter({
+    id: "staff-create-ip",
+    windowMs: 15 * 60 * 1000,
+    max: isProduction ? 30 : 100,
     message:
       "Too many staff creation requests. Please wait a few minutes before adding more accounts.",
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-/**
- * 5. Forgot Password Limiter
- * Applied to POST /api/auth/forgot-password.
- * Prevents email inbox bombing attacks and shields transactional email quota.
- *
- * Production: 5 requests per 1 hour
- * Development: 50 requests per 1 hour
- */
-export const forgotPasswordLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: isProduction ? 5 : 50,
-  message: {
+  }),
+  createLimiter({
+    id: "staff-create-user",
+    windowMs: 15 * 60 * 1000,
+    max: isProduction ? 20 : 60,
     message:
-      "Too many password reset requests. Please check your inbox or try again in an hour.",
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
+      "Too many staff creation requests for this account. Please wait a few minutes before adding more accounts.",
+    keyGenerator: getUserKey,
+  }),
+];
+
+/**
+ * Email-triggering routes have separate IP and recipient limits. Changing
+ * either the source IP or requested email cannot bypass the other limit.
+ */
+export const forgotPasswordLimiter = createIpAndTargetLimiters({
+  id: "forgot-password",
+  windowMs: 60 * 60 * 1000,
+  ipMax: isProduction ? 10 : 30,
+  targetMax: isProduction ? 3 : 10,
+  message:
+    "Too many password reset requests. Please check your inbox or try again in an hour.",
+  targetKey: getEmailKey,
+});
+
+export const resendVerificationLimiter = createIpAndTargetLimiters({
+  id: "resend-verification",
+  windowMs: 60 * 60 * 1000,
+  ipMax: isProduction ? 10 : 30,
+  targetMax: isProduction ? 3 : 10,
+  message:
+    "Too many verification email requests. Please check your spam folder or try again in an hour.",
+  targetKey: getEmailKey,
 });
 
 /**
- * 6. Password Reset Submission Limiter
- * Applied to POST /api/auth/reset-password.
- * Protects against brute-forcing password reset tokens.
- * Only failed token submissions count against the limit.
- *
- * Production: 10 failed attempts per 15 minutes
- * Development: 50 attempts per 15 minutes
+ * Reset submissions are bounded per source IP and reset token.
  */
-export const resetPasswordLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: isProduction ? 10 : 50,
-  skipSuccessfulRequests: true,
-  message: {
+export const resetPasswordLimiter = [
+  createLimiter({
+    id: "reset-password-ip",
+    windowMs: 15 * 60 * 1000,
+    max: isProduction ? 20 : 50,
+    skipSuccessfulRequests: true,
     message:
       "Too many failed password reset attempts. Please request a new reset link.",
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-/**
- * 7. Resend Email Verification Limiter
- * Applied to POST /api/auth/resend-verification.
- * Prevents spamming verification emails and inbox flooding.
- *
- * Production: 5 requests per 1 hour
- * Development: 50 requests per 1 hour
- */
-export const resendVerificationLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: isProduction ? 5 : 50,
-  message: {
+  }),
+  createLimiter({
+    id: "reset-password-token",
+    windowMs: 15 * 60 * 1000,
+    max: isProduction ? 6 : 20,
+    skipSuccessfulRequests: true,
     message:
-      "Too many verification email requests. Please check your spam folder or try again in an hour.",
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+      "Too many failed password reset attempts. Please request a new reset link.",
+    keyGenerator: getResetTokenKey,
+  }),
+];
 
 /**
- * 8. Sensitive OTP Action Limiter
- * Applied to POST /api/auth/clinic-profile/deactivate/initiate and verify.
- * Protects high-impact clinic deactivation actions from brute-force OTP guessing.
- * Only failed OTP attempts increment the counter.
- *
- * Production: 5 attempts per 15 minutes
- * Development: 50 attempts per 15 minutes
+ * OTP sending counts all requests; OTP verification counts failed attempts.
  */
-export const sensitiveActionLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: isProduction ? 5 : 50,
-  skipSuccessfulRequests: true,
-  message: {
+export const sensitiveActionInitiateLimiter = [
+  createLimiter({
+    id: "sensitive-action-initiate-ip",
+    windowMs: 60 * 60 * 1000,
+    max: isProduction ? 10 : 30,
+    message:
+      "Too many security code requests. Please wait before requesting another code.",
+  }),
+  createLimiter({
+    id: "sensitive-action-initiate-user",
+    windowMs: 60 * 60 * 1000,
+    max: isProduction ? 3 : 10,
+    message:
+      "Too many security code requests. Please wait before requesting another code.",
+    keyGenerator: getUserKey,
+  }),
+];
+
+export const sensitiveActionVerifyLimiter = [
+  createLimiter({
+    id: "sensitive-action-verify-ip",
+    windowMs: 15 * 60 * 1000,
+    max: isProduction ? 15 : 50,
+    skipSuccessfulRequests: true,
     message:
       "Too many security verification attempts. Please wait 15 minutes before trying again.",
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+  }),
+  createLimiter({
+    id: "sensitive-action-verify-user",
+    windowMs: 15 * 60 * 1000,
+    max: isProduction ? 5 : 20,
+    skipSuccessfulRequests: true,
+    message:
+      "Too many security verification attempts. Please wait 15 minutes before trying again.",
+    keyGenerator: getUserKey,
+  }),
+];
 
 /**
  * Backwards compatibility alias for any existing reference.

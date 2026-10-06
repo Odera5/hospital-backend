@@ -352,3 +352,11 @@ model SubscriptionHistory {
 
   @@index([clinicId])
 }
+
+model RateLimitCounter {
+  key     String   @id
+  hits    Int
+  resetAt DateTime @db.Timestamptz(3)
+
+  @@index([resetAt])
+}

@@ -18,8 +18,10 @@ import {
   forgotPasswordLimiter,
   resetPasswordLimiter,
   resendVerificationLimiter,
-  sensitiveActionLimiter,
-  authLimiter,
+  emailRecipientLimiter,
+  sensitiveActionInitiateLimiter,
+  sensitiveActionVerifyLimiter,
+  canSendNewClinicAdminAlert,
 } from "../middleware/rateLimit.js";
 import {
   createEmailVerification,
@@ -722,7 +724,7 @@ router.post(
   "/clinic-profile/deactivate/initiate",
   protect,
   authorizeRoles("admin"),
-  sensitiveActionLimiter,
+  ...sensitiveActionInitiateLimiter,
   async (req, res) => {
     try {
       const { password } = req.body;
@@ -800,7 +802,7 @@ router.post(
   "/clinic-profile/deactivate/verify",
   protect,
   authorizeRoles("admin"),
-  sensitiveActionLimiter,
+  ...sensitiveActionVerifyLimiter,
   async (req, res) => {
     try {
       const { otp } = req.body;
@@ -858,7 +860,8 @@ router.post(
 
 router.post(
   "/register-clinic",
-  registrationLimiter,
+  ...registrationLimiter,
+  emailRecipientLimiter,
   validateClinicRegistration,
   async (req, res) => {
     try {
@@ -885,8 +888,7 @@ router.post(
       }
 
       // 2. Cloudflare Turnstile Verification
-      const clientIp =
-        req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "";
+      const clientIp = req.ip || req.socket?.remoteAddress || "";
       const turnstileCheck = await verifyTurnstileToken({
         token: turnstileToken,
         ipAddress: clientIp,
@@ -1012,14 +1014,29 @@ router.post(
           " Clinic account was created, but the verification email could not be sent right now. Please use the resend verification option from the login page after email delivery is configured.";
       }
 
-      // Asynchronously trigger alert to Primux Care admin (primuxcare@gmail.com)
-      sendAdminNewClinicAlert({
-        clinic,
-        adminUser,
-        ipAddress: clientIp,
-      }).catch((adminAlertErr) => {
-        console.error("Admin registration alert email error:", adminAlertErr);
-      });
+      try {
+        if (await canSendNewClinicAdminAlert()) {
+          sendAdminNewClinicAlert({
+            clinic,
+            adminUser,
+            ipAddress: clientIp,
+          }).catch((adminAlertErr) => {
+            console.error(
+              "Admin registration alert email error:",
+              adminAlertErr,
+            );
+          });
+        } else {
+          console.warn(
+            "New clinic admin alert email limit reached; suppressing this alert.",
+          );
+        }
+      } catch (adminAlertLimitError) {
+        console.error(
+          "Could not check the new clinic admin alert email limit:",
+          adminAlertLimitError,
+        );
+      }
 
       res.status(201).json({
         message: `Clinic registered successfully.${emailWarning || " A welcome email has been sent to confirm the admin account."}`,
@@ -1038,7 +1055,7 @@ router.post(
   "/signup",
   protect,
   authorizeRoles(...STAFF_MANAGER_ROLES),
-  staffCreationLimiter,
+  ...staffCreationLimiter,
   validateSignup,
   async (req, res) => {
     try {
@@ -1456,7 +1473,7 @@ router.put("/profile", protect, async (req, res) => {
   }
 });
 
-router.post("/login", loginLimiter, validateLogin, async (req, res) => {
+router.post("/login", ...loginLimiter, validateLogin, async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) {
@@ -1612,7 +1629,8 @@ router.get("/verify-email", async (req, res) => {
 
 router.post(
   "/resend-verification",
-  resendVerificationLimiter,
+  ...resendVerificationLimiter,
+  emailRecipientLimiter,
   async (req, res) => {
   try {
     const email = String(req.body?.email || "")
@@ -1626,26 +1644,30 @@ router.post(
     const user = await getUserByEmail(email);
 
     if (!user) {
-      return res.status(404).json({ message: "User not found" });
+      return res.json({
+        message:
+          "If the account is eligible, a verification email has been sent.",
+      });
     }
 
     if (!user.isActive) {
-      return res
-        .status(403)
-        .json({ message: "Your staff account has been deactivated" });
+      return res.json({
+        message:
+          "If the account is eligible, a verification email has been sent.",
+      });
     }
 
     if (!user.clinic?.isActive) {
-      return res.status(403).json({
+      return res.json({
         message:
-          "Your clinic account has been deactivated. Contact support for reactivation.",
+          "If the account is eligible, a verification email has been sent.",
       });
     }
 
     if (user.emailVerified) {
-      return res.status(400).json({
+      return res.json({
         message:
-          "This email address is already confirmed. You can sign in now.",
+          "If the account is eligible, a verification email has been sent.",
       });
     }
 
@@ -1763,7 +1785,11 @@ router.post("/logout", async (req, res) => {
   }
 });
 
-router.post("/forgot-password", forgotPasswordLimiter, async (req, res) => {
+router.post(
+  "/forgot-password",
+  ...forgotPasswordLimiter,
+  emailRecipientLimiter,
+  async (req, res) => {
   try {
     const email = String(req.body?.email || "")
       .toLowerCase()
@@ -1780,7 +1806,8 @@ router.post("/forgot-password", forgotPasswordLimiter, async (req, res) => {
       return res.json({
         message:
           "If an account exists, a password reset link has been sent to the email.",
-      });
+        },
+      );
     }
 
     const resetToken = crypto.randomBytes(32).toString("hex");
@@ -1820,7 +1847,7 @@ router.post("/forgot-password", forgotPasswordLimiter, async (req, res) => {
   }
 });
 
-router.post("/reset-password", resetPasswordLimiter, async (req, res) => {
+router.post("/reset-password", ...resetPasswordLimiter, async (req, res) => {
   try {
     const { token, newPassword } = req.body;
 

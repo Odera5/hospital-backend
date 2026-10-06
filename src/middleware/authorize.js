@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import { prisma } from "../lib/prisma.js";
+import { authenticatedApiLimiter } from "./rateLimit.js";
 import {
   getAllowedActiveBranches,
   resolveActiveBranch,
@@ -11,7 +12,7 @@ import { hasEnterpriseAccess } from "../utils/subscriptionAccess.js";
 export const protect = async (req, res, next) => {
   try {
     if (req.user) {
-      return next();
+      return authenticatedApiLimiter(req, res, next);
     }
 
     let token = req.cookies?.accessToken;
@@ -129,7 +130,7 @@ export const protect = async (req, res, next) => {
     }
 
     req.user = user;
-    next();
+    return authenticatedApiLimiter(req, res, next);
   } catch (error) {
     console.error("JWT error:", error.message);
 

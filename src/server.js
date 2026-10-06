@@ -1,4 +1,4 @@
-import dotenv from "dotenv";
+import "dotenv/config";
 import { execSync } from "child_process";
 import connectDB from "./db.js";
 import { startAppointmentReminderWorker } from "./services/appointmentReminderService.js";
@@ -6,9 +6,11 @@ import { ensurePatientSearchIndexesBackfilled } from "./services/patientSearchIn
 import { startTrashCleanupWorker } from "./services/trashCleanupService.js";
 import { startBirthdayGreetingWorker } from "./services/birthdayGreetingService.js";
 import { prisma } from "./lib/prisma.js";
+import {
+  startRateLimitCleanup,
+  stopRateLimitCleanup,
+} from "./middleware/rateLimit.js";
 import app from "./app.js";
-
-dotenv.config();
 
 const PORT = process.env.PORT || 5000;
 let server;
@@ -23,6 +25,8 @@ const shutdown = async (signal) => {
   console.log(`${signal} received. Shutting down gracefully...`);
 
   try {
+    stopRateLimitCleanup();
+
     if (server) {
       await new Promise((resolve, reject) => {
         server.close((error) => {
@@ -63,6 +67,7 @@ const startServer = async () => {
   try {
     runMigrations();
     await connectDB();
+    startRateLimitCleanup();
     server = app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
     });
@@ -85,5 +90,3 @@ process.on("SIGTERM", () => {
 });
 
 startServer();
-
-
