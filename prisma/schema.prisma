@@ -233,16 +233,39 @@ model Appointment {
   patientRequestedRescheduleAt   DateTime?
   patientResponseToken           String    @unique
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  branchId  String?
-  patient   Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  dentist   User?    @relation(fields: [dentistId], references: [id], onDelete: SetNull)
-  branch    Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  createdAt     DateTime                  @default(now())
+  updatedAt     DateTime                  @updatedAt
+  branchId      String?
+  patient       Patient                   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  dentist       User?                     @relation(fields: [dentistId], references: [id], onDelete: SetNull)
+  branch        Branch?                   @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  notifications AppointmentNotification[]
 
   @@index([patientId, appointmentDate])
   @@index([dentistId, appointmentDate])
   @@index([reminderEnabled, status, appointmentDate])
+}
+
+model AppointmentNotification {
+  id               String      @id @default(cuid())
+  appointmentId    String
+  dedupeKey        String      @unique
+  channel          String
+  kind             String
+  reminderOffset   Int
+  appointmentStart DateTime
+  status           String      @default("pending")
+  attempts         Int         @default(0)
+  nextAttemptAt    DateTime    @default(now())
+  lockedUntil      DateTime?
+  sentAt           DateTime?
+  lastError        String      @default("")
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  appointment      Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt], map: "AppointmentNotification_status_nextAttemptAt_idx")
+  @@index([appointmentId, kind, reminderOffset, appointmentStart], map: "AppointmentNotification_appointment_offset_start_idx")
 }
 
 model WaitingRoom {

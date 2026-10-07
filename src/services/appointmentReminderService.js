@@ -8,10 +8,17 @@ import {
 const RESEND_API_URL = "https://api.resend.com/emails";
 const TWILIO_API_BASE_URL = "https://api.twilio.com/2010-04-01";
 const REMINDER_POLL_INTERVAL_MS = 5 * 60 * 1000;
+const NOTIFICATION_POLL_INTERVAL_MS = 15 * 1000;
+const NOTIFICATION_MAX_ATTEMPTS = 8;
+const NOTIFICATION_BATCH_SIZE = 10;
+const NOTIFICATION_LEASE_MS = 2 * 60 * 1000;
+const DELIVERY_TIMEOUT_MS = 15 * 1000;
 
 let transporterPromise = null;
 let reminderIntervalId = null;
+let notificationIntervalId = null;
 let reminderJobRunning = false;
+let notificationJobRunning = false;
 let reminderWorkerDisabled = false;
 
 const isMissingDatabaseColumnError = (error) =>
@@ -128,6 +135,11 @@ const getTransporter = async () => {
         host: process.env.SMTP_HOST,
         port: Number(process.env.SMTP_PORT),
         secure: String(process.env.SMTP_SECURE || "").toLowerCase() === "true",
+        requireTLS:
+          String(process.env.SMTP_SECURE || "").toLowerCase() !== "true",
+        connectionTimeout: 10_000,
+        greetingTimeout: 10_000,
+        socketTimeout: 30_000,
         disableFileAccess: true,
         disableUrlAccess: true,
         auth: {
@@ -160,8 +172,27 @@ const getAppointmentStartDateTime = (appointmentDate, timeSlot) => {
 const isLikelyE164PhoneNumber = (value) =>
   /^\+[1-9]\d{7,14}$/.test(String(value || "").trim());
 
+const escapeHtml = (value) =>
+  String(value ?? "").replace(/[&<>"']/g, (character) => {
+    const entities = {
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    };
+
+    return entities[character];
+  });
+
+const fetchWithTimeout = (url, options) =>
+  fetch(url, {
+    ...options,
+    signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
+  });
+
 const buildReminderLinks = (responseToken) => {
-  const baseUrl = getBaseUrl().replace(/\/$/, "");
+  const baseUrl = getBaseUrl().replace(/\/+$/, "");
   const encodedToken = encodeURIComponent(responseToken);
 
   return {
@@ -194,8 +225,13 @@ const buildReminderEmailCopy = ({
   const timeText = getTimeText(Number(type));
   const title = `Appointment Reminder: Coming up ${timeText}`;
   const intro = `This is a friendly reminder that you have an appointment coming up ${timeText}.`;
-  
   const { confirmUrl, rescheduleUrl } = buildReminderLinks(responseToken);
+  const safePatientName = escapeHtml(patientName || "there");
+  const safeClinicName = escapeHtml(clinicName || "Your clinic");
+  const safeTitle = escapeHtml(title);
+  const safeIntro = escapeHtml(intro);
+  const safeDate = escapeHtml(formattedDate);
+  const safeTime = escapeHtml(timeSlot);
 
   return {
     subject: `${clinicName || "Your clinic"} Appointment Reminder`,
@@ -217,15 +253,15 @@ const buildReminderEmailCopy = ({
       <div style="font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; padding: 32px 16px;">
         <div style="max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 18px; padding: 40px 32px; border: 1px solid #e2e8f0; box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);">
           <p style="margin: 0 0 10px; color: #0f766e; font-size: 12px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase;">Appointment Reminder</p>
-          <h1 style="margin: 0 0 16px; color: #0f172a; font-size: 26px; line-height: 1.2;">${title}</h1>
+          <h1 style="margin: 0 0 16px; color: #0f172a; font-size: 26px; line-height: 1.2;">${safeTitle}</h1>
           <p style="margin: 0 0 24px; color: #475569; font-size: 16px; line-height: 1.6;">
-            Hello ${patientName || "there"},<br /><br />
-            ${intro}
+            Hello ${safePatientName},<br /><br />
+            ${safeIntro}
           </p>
           <div style="background: linear-gradient(135deg, #ecfeff, #f8fafc); border: 1px solid #bae6fd; border-radius: 16px; padding: 20px 22px; margin-bottom: 24px;">
-            <p style="margin: 0 0 8px; color: #0f172a; font-size: 15px;"><strong>Clinic:</strong> ${clinicName || "Your clinic"}</p>
-            <p style="margin: 0 0 8px; color: #0f172a; font-size: 15px;"><strong>Date:</strong> ${formattedDate}</p>
-            <p style="margin: 0; color: #0f172a; font-size: 15px;"><strong>Time:</strong> ${timeSlot}</p>
+            <p style="margin: 0 0 8px; color: #0f172a; font-size: 15px;"><strong>Clinic:</strong> ${safeClinicName}</p>
+            <p style="margin: 0 0 8px; color: #0f172a; font-size: 15px;"><strong>Date:</strong> ${safeDate}</p>
+            <p style="margin: 0; color: #0f172a; font-size: 15px;"><strong>Time:</strong> ${safeTime}</p>
           </div>
           <div style="margin-bottom: 24px; display: flex; flex-wrap: wrap; gap: 12px;">
             <a href="${confirmUrl}" style="display: inline-block; background-color: #0f766e; color: #ffffff; text-decoration: none; padding: 14px 22px; border-radius: 12px; font-weight: 700; font-size: 14px;">
@@ -291,8 +327,13 @@ const buildBookingConfirmationEmailCopy = ({
   
   const title = "Appointment Booked Successfully";
   const intro = "Your appointment has been successfully scheduled. Here are the details of your booking:";
-  
   const { confirmUrl, rescheduleUrl } = buildReminderLinks(responseToken);
+  const safePatientName = escapeHtml(patientName || "there");
+  const safeClinicName = escapeHtml(clinicName || "Your clinic");
+  const safeDate = escapeHtml(formattedDate);
+  const safeTime = escapeHtml(timeSlot);
+  const safeTitle = escapeHtml(title);
+  const safeIntro = escapeHtml(intro);
 
   return {
     subject: `Appointment Booked - ${clinicName || "Your Clinic"}`,
@@ -314,15 +355,15 @@ const buildBookingConfirmationEmailCopy = ({
       <div style="font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; padding: 32px 16px;">
         <div style="max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 18px; padding: 40px 32px; border: 1px solid #e2e8f0; box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);">
           <p style="margin: 0 0 10px; color: #0f766e; font-size: 12px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase;">Booking Confirmation</p>
-          <h1 style="margin: 0 0 16px; color: #0f172a; font-size: 26px; line-height: 1.2;">${title}</h1>
+          <h1 style="margin: 0 0 16px; color: #0f172a; font-size: 26px; line-height: 1.2;">${safeTitle}</h1>
           <p style="margin: 0 0 24px; color: #475569; font-size: 16px; line-height: 1.6;">
-            Hello ${patientName || "there"},<br /><br />
-            ${intro}
+            Hello ${safePatientName},<br /><br />
+            ${safeIntro}
           </p>
           <div style="background: linear-gradient(135deg, #ecfeff, #f8fafc); border: 1px solid #bae6fd; border-radius: 16px; padding: 20px 22px; margin-bottom: 24px;">
-            <p style="margin: 0 0 8px; color: #0f172a; font-size: 15px;"><strong>Clinic:</strong> ${clinicName || "Your clinic"}</p>
-            <p style="margin: 0 0 8px; color: #0f172a; font-size: 15px;"><strong>Date:</strong> ${formattedDate}</p>
-            <p style="margin: 0; color: #0f172a; font-size: 15px;"><strong>Time:</strong> ${timeSlot}</p>
+            <p style="margin: 0 0 8px; color: #0f172a; font-size: 15px;"><strong>Clinic:</strong> ${safeClinicName}</p>
+            <p style="margin: 0 0 8px; color: #0f172a; font-size: 15px;"><strong>Date:</strong> ${safeDate}</p>
+            <p style="margin: 0; color: #0f172a; font-size: 15px;"><strong>Time:</strong> ${safeTime}</p>
           </div>
           <div style="margin-bottom: 24px; display: flex; flex-wrap: wrap; gap: 12px;">
             <a href="${confirmUrl}" style="display: inline-block; background-color: #0f766e; color: #ffffff; text-decoration: none; padding: 14px 22px; border-radius: 12px; font-weight: 700; font-size: 14px;">
@@ -349,6 +390,7 @@ const sendReminderEmail = async ({
   timeSlot,
   type,
   responseToken,
+  idempotencyKey,
 }) => {
   const { subject, text, html } = buildReminderEmailCopy({
     patientName,
@@ -360,9 +402,10 @@ const sendReminderEmail = async ({
   });
 
   if (isResendConfigured()) {
-    const response = await fetch(RESEND_API_URL, {
+    const response = await fetchWithTimeout(RESEND_API_URL, {
       method: "POST",
       headers: {
+        "Idempotency-Key": idempotencyKey,
         Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
         "Content-Type": "application/json",
       },
@@ -410,7 +453,7 @@ export const sendBookingConfirmationEmail = async ({
   });
 
   if (isResendConfigured()) {
-    const response = await fetch(RESEND_API_URL, {
+    const response = await fetchWithTimeout(RESEND_API_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
@@ -491,7 +534,7 @@ const sendReminderSms = async ({
   const credentials = Buffer.from(`${accountSid}:${authToken}`).toString(
     "base64",
   );
-  const response = await fetch(
+  const response = await fetchWithTimeout(
     `${TWILIO_API_BASE_URL}/Accounts/${accountSid}/Messages.json`,
     {
       method: "POST",
@@ -509,19 +552,6 @@ const sendReminderSms = async ({
   }
 };
 
-const markReminderFailure = async (appointmentId, errorMessage) => {
-  await prisma.appointment.update({
-    where: { id: appointmentId },
-    data: {
-      reminderStatus: "failed",
-      reminderLastError: String(errorMessage || "Reminder delivery failed").slice(
-        0,
-        500,
-      ),
-    },
-  });
-};
-
 const markReminderDisabled = async (
   appointmentId,
   reminderStatus,
@@ -537,24 +567,310 @@ const markReminderDisabled = async (
   });
 };
 
-const markReminderSent = async (appointmentId, type, reminderLastError = "") => {
-  const appointment = await prisma.appointment.findUnique({
-    where: { id: appointmentId },
-    select: { remindersSent: true }
-  });
-  
-  const sent = Array.isArray(appointment?.remindersSent) ? appointment.remindersSent : [];
-  sent.push(Number(type));
+const queueReminderDeliveries = async ({
+  appointment,
+  appointmentStart,
+  offset,
+  channels,
+}) => {
+  const scheduledFor = appointmentStart.toISOString();
 
-  await prisma.appointment.update({
+  await prisma.appointmentNotification.createMany({
+    data: channels.map((channel) => ({
+      appointmentId: appointment.id,
+      dedupeKey: `reminder:${appointment.id}:${scheduledFor}:${offset}:${channel}`,
+      channel,
+      kind: "reminder",
+      reminderOffset: offset,
+      appointmentStart,
+    })),
+    skipDuplicates: true,
+  });
+};
+
+const claimDueNotifications = () =>
+  prisma.$queryRaw`
+    WITH due AS (
+      SELECT "id"
+      FROM "AppointmentNotification"
+      WHERE (
+        ("status" = 'pending' AND "nextAttemptAt" <= NOW())
+        OR ("status" = 'processing' AND "lockedUntil" <= NOW())
+      )
+      ORDER BY "nextAttemptAt", "createdAt"
+      FOR UPDATE SKIP LOCKED
+      LIMIT ${NOTIFICATION_BATCH_SIZE}
+    )
+    UPDATE "AppointmentNotification" AS notification
+    SET
+      "status" = 'processing',
+      "attempts" = notification."attempts" + 1,
+      "lockedUntil" = NOW() + (${NOTIFICATION_LEASE_MS} * INTERVAL '1 millisecond'),
+      "updatedAt" = NOW()
+    FROM due
+    WHERE notification."id" = due."id"
+    RETURNING
+      notification."id",
+      notification."appointmentId",
+      notification."channel",
+      notification."kind",
+      notification."reminderOffset",
+      notification."appointmentStart",
+      notification."attempts"
+  `;
+
+const updateReminderOffsetStatus = async (
+  tx,
+  appointmentId,
+  reminderOffset,
+  appointmentStart,
+  notifications,
+) => {
+  const appointment = await tx.appointment.findUnique({
     where: { id: appointmentId },
-    data: {
-      reminderStatus: "sent",
-      remindersSent: sent,
-      reminderLastSentAt: new Date(),
-      reminderLastError: String(reminderLastError || "").slice(0, 500),
+    select: {
+      appointmentDate: true,
+      timeSlot: true,
+      reminderEnabled: true,
+      status: true,
     },
   });
+  const currentStart = appointment
+    ? getAppointmentStartDateTime(
+        appointment.appointmentDate,
+        appointment.timeSlot,
+      )
+    : null;
+  if (
+    !currentStart ||
+    currentStart.getTime() !== new Date(appointmentStart).getTime() ||
+    !appointment.reminderEnabled ||
+    appointment.status !== "scheduled"
+  ) {
+    return;
+  }
+
+  if (
+    notifications.some(
+      ({ status }) => status === "pending" || status === "processing",
+    )
+  ) {
+    await tx.appointment.updateMany({
+      where: { id: appointmentId },
+      data: { reminderStatus: "queued" },
+    });
+    return;
+  }
+
+  const sent = notifications.some(({ status }) => status === "sent");
+  const errors = notifications
+    .filter(({ status, lastError }) => status === "failed" && lastError)
+    .map(({ lastError }) => lastError);
+
+  await tx.$executeRaw`
+    UPDATE "Appointment"
+    SET
+      "remindersSent" = CASE
+        WHEN "remindersSent" @> jsonb_build_array(${reminderOffset})
+          THEN "remindersSent"
+        ELSE "remindersSent" || jsonb_build_array(${reminderOffset})
+      END,
+      "reminderStatus" = ${
+        sent ? (errors.length ? "partial" : "sent") : "failed"
+      },
+      "reminderLastSentAt" = CASE
+        WHEN ${sent} THEN NOW()
+        ELSE "reminderLastSentAt"
+      END,
+      "reminderLastError" = ${errors.join(" | ").slice(0, 500)}
+    WHERE "id" = ${appointmentId}
+  `;
+};
+
+const finishNotification = async (notification, status, lastError = "") => {
+  await prisma.$transaction(async (tx) => {
+    await tx.appointmentNotification.update({
+      where: { id: notification.id },
+      data: {
+        status,
+        sentAt: status === "sent" ? new Date() : null,
+        lockedUntil: null,
+        lastError: String(lastError || "").slice(0, 500),
+      },
+    });
+
+    if (notification.kind === "reminder") {
+      const notifications = await tx.appointmentNotification.findMany({
+        where: {
+          appointmentId: notification.appointmentId,
+          kind: "reminder",
+          reminderOffset: notification.reminderOffset,
+          appointmentStart: notification.appointmentStart,
+        },
+        select: { status: true, lastError: true },
+      });
+      await updateReminderOffsetStatus(
+        tx,
+        notification.appointmentId,
+        notification.reminderOffset,
+        notification.appointmentStart,
+        notifications,
+      );
+    }
+  });
+};
+
+const retryNotification = async (notification, error) => {
+  const message = String(error?.message || error || "Notification delivery failed");
+  const exhausted = notification.attempts >= NOTIFICATION_MAX_ATTEMPTS;
+
+  if (exhausted) {
+    await finishNotification(notification, "failed", message);
+    console.error(
+      `Appointment reminder permanently failed (${notification.id}) after ${notification.attempts} attempts:`,
+      message,
+    );
+    return;
+  }
+
+  const delayMs = Math.min(
+    60 * 60 * 1000,
+    30 * 1000 * 2 ** Math.max(notification.attempts - 1, 0),
+  );
+  await prisma.appointmentNotification.update({
+    where: { id: notification.id },
+    data: {
+      status: "pending",
+      nextAttemptAt: new Date(Date.now() + delayMs),
+      lockedUntil: null,
+      lastError: message.slice(0, 500),
+    },
+  });
+  console.error(
+    `Appointment reminder delivery attempt ${notification.attempts} failed (${notification.id}); retrying:`,
+    message,
+  );
+};
+
+const deliverNotification = async (notification) => {
+  const appointment = await prisma.appointment.findUnique({
+    where: { id: notification.appointmentId },
+    include: {
+      patient: {
+        select: {
+          name: true,
+          email: true,
+          phone: true,
+          clinic: {
+            select: {
+              name: true,
+              plan: true,
+              subscriptionEnds: true,
+              paystackSubscriptionStatus: true,
+              paystackNextPaymentDate: true,
+              stripeSubscriptionStatus: true,
+              stripeNextPaymentDate: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+  if (!appointment || appointment.status !== "scheduled" || !appointment.reminderEnabled) {
+    await finishNotification(notification, "cancelled", "Appointment reminder is no longer active.");
+    return;
+  }
+
+  const appointmentStart = getAppointmentStartDateTime(
+    appointment.appointmentDate,
+    appointment.timeSlot,
+  );
+  if (
+    !appointmentStart ||
+    appointmentStart.getTime() !== new Date(notification.appointmentStart).getTime()
+  ) {
+    await finishNotification(notification, "cancelled", "Appointment reminder is no longer due.");
+    return;
+  }
+
+  if (!hasReminderAccess(appointment.patient?.clinic)) {
+    await markReminderDisabled(
+      appointment.id,
+      "plan_locked",
+      getReminderAccessRequiredMessage(),
+    );
+    await finishNotification(notification, "cancelled", getReminderAccessRequiredMessage());
+    return;
+  }
+
+  if (appointmentStart <= new Date()) {
+    await markReminderDisabled(appointment.id, "expired");
+    await finishNotification(notification, "cancelled", "Appointment time has passed.");
+    return;
+  }
+
+  const patient = toDecryptedPatient(appointment.patient);
+  if (notification.channel === "email") {
+    if (!patient?.email || !isEmailConfigured()) {
+      throw new Error("No configured email address is available for this appointment.");
+    }
+
+    await sendReminderEmail({
+      email: patient.email,
+      patientName: patient.name,
+      clinicName: appointment.patient.clinic?.name,
+      appointmentDate: appointmentStart,
+      timeSlot: appointment.timeSlot,
+      type: notification.reminderOffset,
+      responseToken: appointment.patientResponseToken,
+      idempotencyKey: notification.dedupeKey,
+    });
+  } else if (notification.channel === "sms") {
+    if (
+      !patient?.phone ||
+      !isLikelyE164PhoneNumber(patient.phone) ||
+      !isSmsConfigured()
+    ) {
+      throw new Error("No configured phone number is available for this appointment.");
+    }
+
+    await sendReminderSms({
+      phone: patient.phone,
+      patientName: patient.name,
+      clinicName: appointment.patient.clinic?.name,
+      appointmentDate: appointmentStart,
+      timeSlot: appointment.timeSlot,
+      type: notification.reminderOffset,
+      responseToken: appointment.patientResponseToken,
+    });
+  } else {
+    throw new Error(`Unsupported appointment notification channel: ${notification.channel}`);
+  }
+
+  await finishNotification(notification, "sent");
+};
+
+export const processAppointmentNotifications = async () => {
+  if (notificationJobRunning || reminderWorkerDisabled) {
+    return;
+  }
+
+  notificationJobRunning = true;
+  try {
+    const notifications = await claimDueNotifications();
+    await Promise.all(
+      notifications.map(async (notification) => {
+        try {
+          await deliverNotification(notification);
+        } catch (error) {
+          await retryNotification(notification, error);
+        }
+      }),
+    );
+  } finally {
+    notificationJobRunning = false;
+  }
 };
 
 export const processAppointmentReminders = async () => {
@@ -714,75 +1030,16 @@ export const processAppointmentReminders = async () => {
         continue;
       }
 
-      try {
-        const deliveries = [];
+      const channels = [];
+      if (hasEmailTarget) channels.push("email");
+      if (hasSmsTarget) channels.push("sms");
 
-        if (hasEmailTarget) {
-          deliveries.push(
-            {
-              channel: "email",
-              promise: sendReminderEmail({
-                email: patient.email,
-                patientName: patient.name,
-                clinicName: clinic?.name,
-                appointmentDate: appointmentStart,
-                timeSlot: appointment.timeSlot,
-                type: targetOffset,
-                responseToken: appointment.patientResponseToken,
-              }),
-            },
-          );
-        }
-
-        if (hasSmsTarget) {
-          deliveries.push(
-            {
-              channel: "sms",
-              promise: sendReminderSms({
-                phone: patient.phone,
-                patientName: patient.name,
-                clinicName: clinic?.name,
-                appointmentDate: appointmentStart,
-                timeSlot: appointment.timeSlot,
-                type: targetOffset,
-                responseToken: appointment.patientResponseToken,
-              }),
-            },
-          );
-        }
-
-        const results = await Promise.allSettled(
-          deliveries.map((delivery) => delivery.promise),
-        );
-        const failedDeliveries = results
-          .map((result, index) => ({ result, channel: deliveries[index].channel }))
-          .filter(({ result }) => result.status === "rejected");
-
-        if (failedDeliveries.length === deliveries.length) {
-          throw failedDeliveries[0].result.reason;
-        }
-
-        const partialFailureMessage = failedDeliveries.length
-          ? failedDeliveries
-              .map(
-                ({ channel, result }) =>
-                  `${channel} failed: ${result.reason?.message || String(result.reason || "Unknown delivery error")}`,
-              )
-              .join(" | ")
-          : "";
-
-        await markReminderSent(
-          appointment.id,
-          targetOffset,
-          partialFailureMessage,
-        );
-      } catch (error) {
-        console.error(
-          `Appointment reminder failed for ${appointment.id}:`,
-          error.message,
-        );
-        await markReminderFailure(appointment.id, error.message);
-      }
+      await queueReminderDeliveries({
+        appointment,
+        appointmentStart,
+        offset: targetOffset,
+        channels,
+      });
     }
   } catch (error) {
     if (isMissingDatabaseColumnError(error)) {
@@ -803,6 +1060,7 @@ export const startAppointmentReminderWorker = () => {
   if (
     reminderWorkerDisabled ||
     reminderIntervalId ||
+    notificationIntervalId ||
     !hasReminderDeliveryConfigured()
   ) {
     if (!hasReminderDeliveryConfigured()) {
@@ -823,6 +1081,9 @@ export const startAppointmentReminderWorker = () => {
   processAppointmentReminders().catch((error) => {
     console.error("Initial appointment reminder job failed:", error.message);
   });
+  processAppointmentNotifications().catch((error) => {
+    console.error("Initial appointment notification job failed:", error.message);
+  });
 
   reminderIntervalId = setInterval(() => {
     processAppointmentReminders().catch((error) => {
@@ -830,5 +1091,37 @@ export const startAppointmentReminderWorker = () => {
     });
   }, REMINDER_POLL_INTERVAL_MS);
 
+  notificationIntervalId = setInterval(() => {
+    processAppointmentNotifications().catch((error) => {
+      console.error("Appointment notification job failed:", error.message);
+    });
+  }, NOTIFICATION_POLL_INTERVAL_MS);
+
   console.log("Appointment reminder worker started.");
+};
+
+export const stopAppointmentReminderWorker = async () => {
+  if (reminderIntervalId) {
+    clearInterval(reminderIntervalId);
+    reminderIntervalId = null;
+  }
+
+  if (notificationIntervalId) {
+    clearInterval(notificationIntervalId);
+    notificationIntervalId = null;
+  }
+
+  const drainDeadline = Date.now() + 35_000;
+  while (
+    (reminderJobRunning || notificationJobRunning) &&
+    Date.now() < drainDeadline
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  if (reminderJobRunning || notificationJobRunning) {
+    console.warn(
+      "Appointment notification worker shutdown timed out; in-flight notifications will be retried after their lease expires.",
+    );
+  }
 };

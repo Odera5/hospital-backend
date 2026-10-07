@@ -1,7 +1,10 @@
 import "dotenv/config";
 import { execSync } from "child_process";
 import connectDB from "./db.js";
-import { startAppointmentReminderWorker } from "./services/appointmentReminderService.js";
+import {
+  startAppointmentReminderWorker,
+  stopAppointmentReminderWorker,
+} from "./services/appointmentReminderService.js";
 import { ensurePatientSearchIndexesBackfilled } from "./services/patientSearchIndex.js";
 import { startTrashCleanupWorker } from "./services/trashCleanupService.js";
 import { startBirthdayGreetingWorker } from "./services/birthdayGreetingService.js";
@@ -26,6 +29,7 @@ const shutdown = async (signal) => {
 
   try {
     stopRateLimitCleanup();
+    await stopAppointmentReminderWorker();
 
     if (server) {
       await new Promise((resolve, reject) => {
