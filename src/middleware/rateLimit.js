@@ -2,7 +2,6 @@ import crypto from "crypto";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { prisma } from "../lib/prisma.js";
 
-const isProduction = String(process.env.NODE_ENV || "").trim() === "production";
 let cleanupTimer;
 
 const incrementCounter = async (key, windowMs) => {
@@ -75,7 +74,7 @@ class PostgresRateLimitStore {
 }
 
 export const startRateLimitCleanup = () => {
-  if (!isProduction || cleanupTimer) {
+  if (cleanupTimer) {
     return;
   }
 
@@ -128,19 +127,9 @@ const getResetTokenKey = (req) => {
 
 const getUserKey = (req) => `user:${req.user?.id || "anonymous"}`;
 
-const createStore = (id, windowMs) => {
-  if (!isProduction) {
-    return undefined;
-  }
-
-  return new PostgresRateLimitStore(id, windowMs);
-};
+const createStore = (id, windowMs) => new PostgresRateLimitStore(id, windowMs);
 
 export const canSendNewClinicAdminAlert = async () => {
-  if (!isProduction) {
-    return true;
-  }
-
   const { totalHits } = await incrementCounter(
     "bhf:email-budget:new-clinic-admin-alerts",
     60 * 60 * 1000,
@@ -162,7 +151,7 @@ const createLimiter = ({
     max,
     skipSuccessfulRequests,
     ...(keyGenerator ? { keyGenerator } : {}),
-    ...(isProduction ? { store: createStore(id, windowMs) } : {}),
+    store: createStore(id, windowMs),
     message: { message },
     standardHeaders: true,
     legacyHeaders: false,
@@ -192,10 +181,8 @@ const createIpAndTargetLimiters = ({
 export const apiLimiter = createLimiter({
   id: "api",
   windowMs: 15 * 60 * 1000,
-  max: isProduction ? 1000 : 2500,
-  message: isProduction
-    ? "Too many requests from this IP, please try again later."
-    : "Too many development requests. Please wait a moment and try again.",
+  max: 1000,
+  message: "Too many requests from this IP, please try again later.",
 });
 
 /**
@@ -205,7 +192,7 @@ export const apiLimiter = createLimiter({
 export const authenticatedApiLimiter = createLimiter({
   id: "authenticated-api-user",
   windowMs: 15 * 60 * 1000,
-  max: isProduction ? 1500 : 3000,
+  max: 1500,
   message: "Too many API requests for this account. Please try again later.",
   keyGenerator: getUserKey,
 });
@@ -218,7 +205,7 @@ export const loginLimiter = [
   createLimiter({
     id: "login-ip",
     windowMs: 15 * 60 * 1000,
-    max: isProduction ? 30 : 100,
+    max: 30,
     skipSuccessfulRequests: true,
     message:
       "Too many failed login attempts. Please wait 15 minutes before trying again.",
@@ -226,7 +213,7 @@ export const loginLimiter = [
   createLimiter({
     id: "login-email",
     windowMs: 15 * 60 * 1000,
-    max: isProduction ? 8 : 25,
+    max: 8,
     skipSuccessfulRequests: true,
     message:
       "Too many failed login attempts for this account. Please wait 15 minutes before trying again.",
@@ -241,8 +228,8 @@ export const loginLimiter = [
 export const registrationLimiter = createIpAndTargetLimiters({
   id: "registration",
   windowMs: 60 * 60 * 1000,
-  ipMax: isProduction ? 3 : 10,
-  targetMax: isProduction ? 3 : 10,
+  ipMax: 3,
+  targetMax: 3,
   message: "Too many account registration attempts. Please try again later.",
   targetKey: getEmailKey,
 });
@@ -254,7 +241,7 @@ export const registrationLimiter = createIpAndTargetLimiters({
 export const emailRecipientLimiter = createLimiter({
   id: "email-recipient",
   windowMs: 60 * 60 * 1000,
-  max: isProduction ? 5 : 15,
+  max: 5,
   message: "Too many email requests for this address. Please try again later.",
   keyGenerator: getEmailKey,
 });
@@ -266,14 +253,14 @@ export const staffCreationLimiter = [
   createLimiter({
     id: "staff-create-ip",
     windowMs: 15 * 60 * 1000,
-    max: isProduction ? 30 : 100,
+    max: 30,
     message:
       "Too many staff creation requests. Please wait a few minutes before adding more accounts.",
   }),
   createLimiter({
     id: "staff-create-user",
     windowMs: 15 * 60 * 1000,
-    max: isProduction ? 20 : 60,
+    max: 20,
     message:
       "Too many staff creation requests for this account. Please wait a few minutes before adding more accounts.",
     keyGenerator: getUserKey,
@@ -287,8 +274,8 @@ export const staffCreationLimiter = [
 export const forgotPasswordLimiter = createIpAndTargetLimiters({
   id: "forgot-password",
   windowMs: 60 * 60 * 1000,
-  ipMax: isProduction ? 10 : 30,
-  targetMax: isProduction ? 3 : 10,
+  ipMax: 10,
+  targetMax: 3,
   message:
     "Too many password reset requests. Please check your inbox or try again in an hour.",
   targetKey: getEmailKey,
@@ -297,8 +284,8 @@ export const forgotPasswordLimiter = createIpAndTargetLimiters({
 export const resendVerificationLimiter = createIpAndTargetLimiters({
   id: "resend-verification",
   windowMs: 60 * 60 * 1000,
-  ipMax: isProduction ? 10 : 30,
-  targetMax: isProduction ? 3 : 10,
+  ipMax: 10,
+  targetMax: 3,
   message:
     "Too many verification email requests. Please check your spam folder or try again in an hour.",
   targetKey: getEmailKey,
@@ -311,7 +298,7 @@ export const resetPasswordLimiter = [
   createLimiter({
     id: "reset-password-ip",
     windowMs: 15 * 60 * 1000,
-    max: isProduction ? 20 : 50,
+    max: 20,
     skipSuccessfulRequests: true,
     message:
       "Too many failed password reset attempts. Please request a new reset link.",
@@ -319,7 +306,7 @@ export const resetPasswordLimiter = [
   createLimiter({
     id: "reset-password-token",
     windowMs: 15 * 60 * 1000,
-    max: isProduction ? 6 : 20,
+    max: 6,
     skipSuccessfulRequests: true,
     message:
       "Too many failed password reset attempts. Please request a new reset link.",
@@ -334,14 +321,14 @@ export const sensitiveActionInitiateLimiter = [
   createLimiter({
     id: "sensitive-action-initiate-ip",
     windowMs: 60 * 60 * 1000,
-    max: isProduction ? 10 : 30,
+    max: 10,
     message:
       "Too many security code requests. Please wait before requesting another code.",
   }),
   createLimiter({
     id: "sensitive-action-initiate-user",
     windowMs: 60 * 60 * 1000,
-    max: isProduction ? 3 : 10,
+    max: 3,
     message:
       "Too many security code requests. Please wait before requesting another code.",
     keyGenerator: getUserKey,
@@ -352,7 +339,7 @@ export const sensitiveActionVerifyLimiter = [
   createLimiter({
     id: "sensitive-action-verify-ip",
     windowMs: 15 * 60 * 1000,
-    max: isProduction ? 15 : 50,
+    max: 15,
     skipSuccessfulRequests: true,
     message:
       "Too many security verification attempts. Please wait 15 minutes before trying again.",
@@ -360,7 +347,7 @@ export const sensitiveActionVerifyLimiter = [
   createLimiter({
     id: "sensitive-action-verify-user",
     windowMs: 15 * 60 * 1000,
-    max: isProduction ? 5 : 20,
+    max: 5,
     skipSuccessfulRequests: true,
     message:
       "Too many security verification attempts. Please wait 15 minutes before trying again.",
