@@ -18,13 +18,6 @@ import {
   verifyPaystackSignature,
   verifyPaystackTransaction,
 } from "../services/paystack.js";
-import {
-  createStripeCheckoutSession,
-  createStripePortalSession,
-  cancelStripeSubscription,
-  handleStripeWebhookEvent,
-  verifyStripeCheckoutSession,
-} from "../services/stripe.js";
 
 const buildPaystackVerificationResponse = ({
   clinic,
@@ -110,7 +103,7 @@ export const initializePaystackCheckout = async (req, res) => {
 
     if (!isNigerian && !clinic.paystackSubscriptionCode) {
       return res.status(403).json({
-        message: "Paystack NGN billing is exclusively for clinics registered in Nigeria. Please use Stripe checkout for international clinics.",
+        message: "Paystack NGN billing is currently available only to clinics registered in Nigeria.",
       });
     }
 
@@ -530,149 +523,4 @@ export const handlePaystackWebhook = async (req, res) => {
       .json({ message: "Failed to process Paystack webhook" });
   }
 };
-
-export const initializeStripeCheckout = async (req, res) => {
-  try {
-    const clinic = await prisma.clinic.findUnique({
-      where: { id: req.user.clinicId },
-    });
-
-    if (!clinic) {
-      return res.status(404).json({ message: "Clinic not found" });
-    }
-
-    const country = String(clinic.country || "").trim().toLowerCase();
-    const isNigerian = country === "nigeria" || country === "ng";
-
-    if (isNigerian && !clinic.stripeSubscriptionId) {
-      return res.status(403).json({
-        message: "Stripe USD billing is for international clinics. Clinics registered in Nigeria are billed in NGN via Paystack.",
-      });
-    }
-
-    const plan = req.body?.plan || "PRO";
-    const interval = req.body?.interval || "monthly";
-
-    const { sessionId, checkoutUrl } = await createStripeCheckoutSession({
-      clinic,
-      plan,
-      interval,
-    });
-
-    await logAuditEvent(req, {
-      action: "billing.stripe_checkout_initiated",
-      resourceType: "billing",
-      resourceId: clinic.id,
-      metadata: { plan, interval, sessionId },
-    });
-
-    return res.json({ sessionId, checkoutUrl });
-  } catch (error) {
-    console.error("Stripe initialization error:", error);
-    return res.status(error.statusCode || 500).json({
-      message: error.message || "Failed to initialize Stripe checkout",
-    });
-  }
-};
-
-export const createStripePortalLink = async (req, res) => {
-  try {
-    const clinic = await prisma.clinic.findUnique({
-      where: { id: req.user.clinicId },
-    });
-
-    if (!clinic) {
-      return res.status(404).json({ message: "Clinic not found" });
-    }
-
-    const { url } = await createStripePortalSession({ clinic });
-    return res.json({ url });
-  } catch (error) {
-    console.error("Stripe portal error:", error);
-    return res.status(error.statusCode || 500).json({
-      message: error.message || "Failed to create Stripe portal session",
-    });
-  }
-};
-
-export const cancelStripeSubscriptionHandler = async (req, res) => {
-  try {
-    const clinic = await prisma.clinic.findUnique({
-      where: { id: req.user.clinicId },
-    });
-
-    if (!clinic) {
-      return res.status(404).json({ message: "Clinic not found" });
-    }
-
-    const result = await cancelStripeSubscription({ clinic });
-
-    await logAuditEvent(req, {
-      action: "billing.stripe_subscription_canceled",
-      resourceType: "billing",
-      resourceId: clinic.id,
-    });
-
-    return res.json({
-      message: result.message,
-      clinic: serializeBillingClinic(result.clinic),
-    });
-  } catch (error) {
-    console.error("Cancel Stripe subscription error:", error);
-    return res.status(error.statusCode || 500).json({
-      message: error.message || "Failed to cancel Stripe subscription",
-    });
-  }
-};
-
-export const handleStripeWebhook = async (req, res) => {
-  try {
-    const signature = req.headers["stripe-signature"];
-    const rawBody = req.body;
-
-    if (!rawBody) {
-      return res.status(400).json({ message: "Missing request body" });
-    }
-
-    const result = await handleStripeWebhookEvent({ rawBody, signature });
-    return res.status(200).json(result);
-  } catch (error) {
-    console.error("Stripe webhook controller error:", error);
-    return res.status(error.statusCode || 500).json({
-      message: error.message || "Failed to process Stripe webhook",
-    });
-  }
-};
-
-export const verifyStripeCheckout = async (req, res) => {
-  try {
-    const sessionId = String(
-      req.query?.session_id || req.body?.session_id || "",
-    ).trim();
-
-    if (!sessionId) {
-      return res.status(400).json({ message: "Missing session_id parameter" });
-    }
-
-    const result = await verifyStripeCheckoutSession(sessionId);
-
-    return res.json({
-      message: result.success
-        ? "Stripe subscription activated successfully"
-        : "Stripe checkout session not completed",
-      clinic: result.clinic ? serializeBillingClinic(result.clinic) : null,
-      session: {
-        id: result.session?.id,
-        status: result.session?.status,
-        paymentStatus: result.session?.payment_status,
-      },
-    });
-  } catch (error) {
-    console.error("Verify Stripe checkout error:", error);
-    return res.status(error.statusCode || 500).json({
-      message: error.message || "Failed to verify Stripe payment",
-    });
-  }
-};
-
 

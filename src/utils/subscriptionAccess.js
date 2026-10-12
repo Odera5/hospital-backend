@@ -5,17 +5,10 @@ export const ACTIVE_PAYSTACK_SUBSCRIPTION_STATUSES = [
   "non-renewing",
 ];
 
-export const ACTIVE_STRIPE_SUBSCRIPTION_STATUSES = [
-  "active",
-  "trialing",
-  "non-renewing",
-];
-
 export const resolveSubscriptionEndDate = (clinic) => {
   const dates = [
     clinic?.subscriptionEnds,
     clinic?.paystackNextPaymentDate,
-    clinic?.stripeNextPaymentDate,
   ]
     .filter(Boolean)
     .map((d) => new Date(d))
@@ -30,11 +23,7 @@ export const hasActivePaidSubscription = (clinic) => {
     String(clinic?.paystackSubscriptionStatus || "").toLowerCase(),
   );
 
-  const hasStripeStatus = ACTIVE_STRIPE_SUBSCRIPTION_STATUSES.includes(
-    String(clinic?.stripeSubscriptionStatus || "").toLowerCase(),
-  );
-
-  if (!hasPaystackStatus && !hasStripeStatus) return false;
+  if (!hasPaystackStatus) return false;
 
   const resolvedEnds = resolveSubscriptionEndDate(clinic);
   if (resolvedEnds) {

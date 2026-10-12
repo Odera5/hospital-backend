@@ -402,8 +402,6 @@ export const createAppointment = async (req, res) => {
         subscriptionEnds: true,
         paystackSubscriptionStatus: true,
         paystackNextPaymentDate: true,
-        stripeSubscriptionStatus: true,
-        stripeNextPaymentDate: true,
       },
     });
 
@@ -567,8 +565,6 @@ export const updateAppointment = async (req, res) => {
         subscriptionEnds: true,
         paystackSubscriptionStatus: true,
         paystackNextPaymentDate: true,
-        stripeSubscriptionStatus: true,
-        stripeNextPaymentDate: true,
       },
     });
 

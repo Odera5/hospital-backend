@@ -177,8 +177,6 @@ router.post("/:id/approve", protect, authorizeRoles("admin", "branch_manager", "
                   subscriptionEnds: true,
                   paystackSubscriptionStatus: true,
                   paystackNextPaymentDate: true,
-                  stripeSubscriptionStatus: true,
-                  stripeNextPaymentDate: true,
                 },
               },
             },
