@@ -359,6 +359,13 @@ const getCurrentActiveBranch = async (req) => {
     return null;
   }
 
+  if (
+    req.user?.role === "branch_manager" &&
+    !normalizeAssignedBranchIds(req.user.assignedBranchIds).includes(branchId)
+  ) {
+    return null;
+  }
+
   return prisma.branch.findFirst({
     where: {
       id: branchId,
@@ -522,7 +529,7 @@ router.put(
 router.put(
   "/clinic-profile/intake-link",
   protect,
-  authorizeRoles("admin", "branch_manager", "doctor", "nurse"),
+  authorizeRoles("admin", "branch_manager"),
   async (req, res) => {
     try {
       const requestedEnabled = req.body?.intakeEnabled;
@@ -549,6 +556,12 @@ router.put(
       }
 
       const isEnterprise = existingClinic.plan === "ENTERPRISE";
+
+      if (req.user.role === "branch_manager" && !isEnterprise) {
+        return res.status(403).json({
+          message: "Only clinic admins can manage clinic-wide intake settings.",
+        });
+      }
 
       if (isEnterprise) {
         const currentBranch = await getCurrentActiveBranch(req);
@@ -582,6 +595,7 @@ router.put(
             intakeEnabled: branch.intakeEnabled,
             branchId: branch.id,
           },
+          branchId: branch.id,
         });
 
         return res.json({
@@ -616,6 +630,7 @@ router.put(
           metadata: {
             intakeEnabled: clinic.intakeEnabled,
           },
+          branchId: null,
         });
 
         return res.json({
@@ -660,6 +675,12 @@ router.post(
 
       const isEnterprise = existingClinic.plan === "ENTERPRISE";
 
+      if (req.user.role === "branch_manager" && !isEnterprise) {
+        return res.status(403).json({
+          message: "Only clinic admins can manage clinic-wide intake settings.",
+        });
+      }
+
       if (isEnterprise) {
         const currentBranch = await getCurrentActiveBranch(req);
 
@@ -679,6 +700,14 @@ router.post(
           },
         });
 
+        await logAuditEvent(req, {
+          action: "clinic_settings.intake_link_regenerate",
+          resourceType: "clinic_settings",
+          resourceId: existingClinic.id,
+          branchId: branch.id,
+          metadata: { branchId: branch.id },
+        });
+
         return res.json({
           message:
             "Patient intake link regenerated successfully for this branch",
@@ -696,6 +725,14 @@ router.post(
             intakeEnabled: true,
             intakePublicToken: createIntakePublicToken(),
           },
+        });
+
+        await logAuditEvent(req, {
+          action: "clinic_settings.intake_link_regenerate",
+          resourceType: "clinic_settings",
+          resourceId: clinic.id,
+          branchId: null,
+          metadata: {},
         });
 
         return res.json({
