@@ -54,7 +54,7 @@ import {
 } from "../utils/branchAccess.js";
 
 const router = express.Router();
-const STAFF_ROLES = ["admin", "branch_manager", "doctor", "nurse", "billing_staff"];
+const STAFF_ROLES = ["admin", "branch_manager", "doctor", "nurse"];
 const STAFF_MANAGER_ROLES = ["admin", "branch_manager"];
 const BRANCH_MANAGER_MANAGEABLE_ROLES = ["doctor", "nurse"];
 const isProduction = process.env.NODE_ENV === "production";
@@ -206,6 +206,7 @@ const serializeUser = (user) => ({
   name: user.name,
   email: user.email,
   role: user.role,
+  canAccessBilling: Boolean(user.canAccessBilling),
   customRoleTitle: user.customRoleTitle || null,
   dateOfBirth: user.dateOfBirth || null,
   avatarUrl: user.avatarUrl || null,
@@ -235,6 +236,7 @@ const getUserByEmail = (email) =>
 const resolveValidAssignedBranchIds = async ({
   clinicId,
   role,
+  canAccessBilling,
   assignedBranchIds,
 }) => {
   if (role === "admin") {
@@ -1097,6 +1099,7 @@ router.post(
         password,
         role,
         customRoleTitle,
+        canAccessBilling,
         assignedBranchIds,
       } = req.body;
       const requestedRole = role || "nurse";
@@ -1119,12 +1122,9 @@ router.post(
           message: "Branch managers can only create doctor or nurse accounts.",
         });
       }
-      if (
-        requestedRole === "billing_staff" &&
-        req.user.role !== "admin"
-      ) {
+      if (canAccessBilling && req.user.role !== "admin") {
         return res.status(403).json({
-          message: "Only clinic admins can create billing staff accounts.",
+          message: "Only clinic admins can grant billing access.",
         });
       }
 
@@ -1182,6 +1182,7 @@ router.post(
           email: normalizedEmail,
           password: hashedPassword,
           role: requestedRole,
+          canAccessBilling: Boolean(canAccessBilling),
           customRoleTitle: customRoleTitle?.trim() || null,
           clinicId: req.user.clinicId,
           assignedBranchIds: branchAssignment.branchIds,
@@ -1215,6 +1216,7 @@ router.post(
         resourceId: newUser.id,
         metadata: {
           role: newUser.role,
+          canAccessBilling: newUser.canAccessBilling,
           email: newUser.email,
         },
       });
@@ -1256,6 +1258,131 @@ router.get(
     } catch (error) {
       console.error("Get staff error:", error);
       res.status(500).json({ message: "Failed to fetch staff accounts" });
+    }
+  },
+);
+
+router.patch(
+  "/staff/:id/convert-legacy-billing-role",
+  protect,
+  authorizeRoles("admin"),
+  async (req, res) => {
+    try {
+      const role = String(req.body?.role || "").trim();
+      if (!["nurse", "doctor", "branch_manager"].includes(role)) {
+        return res.status(400).json({
+          message: "Select a valid primary staff role.",
+        });
+      }
+      if (isSubscriptionExpired(req.user.clinic)) {
+        return res.status(403).json({
+          message: getAdminSubscriptionExpiredMessage(),
+          errorCode: "SUBSCRIPTION_EXPIRED",
+        });
+      }
+      if (role === "branch_manager" && !hasEnterpriseAccess(req.user.clinic)) {
+        return res.status(403).json({
+          message: "Branch Manager accounts require an active Enterprise plan.",
+          errorCode: "UPGRADE_REQUIRED",
+        });
+      }
+
+      const existingUser = await getUserById(req.params.id);
+      if (!existingUser || existingUser.clinicId !== req.user.clinicId) {
+        return res.status(404).json({ message: "Staff account not found" });
+      }
+      if (existingUser.role !== "billing_staff") {
+        return res.status(409).json({
+          message: "Only legacy Billing Staff accounts can be converted.",
+        });
+      }
+
+      const updatedUser = await prisma.user.update({
+        where: { id: existingUser.id },
+        data: { role, canAccessBilling: true },
+        include: { clinic: true },
+      });
+      await logAuditEvent(req, {
+        action: "user.update",
+        resourceType: "user",
+        resourceId: updatedUser.id,
+        metadata: {
+          updatedFields: ["role", "canAccessBilling"],
+          previousRole: existingUser.role,
+          role: updatedUser.role,
+          canAccessBilling: updatedUser.canAccessBilling,
+        },
+      });
+
+      res.json({
+        message: "Legacy Billing Staff account converted; billing access remains enabled.",
+        user: serializeUser(updatedUser),
+      });
+    } catch (error) {
+      console.error("Convert legacy billing role error:", error);
+      res.status(500).json({ message: "Failed to convert legacy Billing Staff account." });
+    }
+  },
+);
+
+router.patch(
+  "/staff/:id/billing-access",
+  protect,
+  authorizeRoles("admin"),
+  async (req, res) => {
+    try {
+      if (isSubscriptionExpired(req.user.clinic)) {
+        return res.status(403).json({
+          message: getAdminSubscriptionExpiredMessage(),
+          errorCode: "SUBSCRIPTION_EXPIRED",
+        });
+      }
+      if (typeof req.body?.canAccessBilling !== "boolean") {
+        return res.status(400).json({
+          message: "Billing access must be set to true or false.",
+        });
+      }
+
+      const existingUser = await getUserById(req.params.id);
+      if (!existingUser || existingUser.clinicId !== req.user.clinicId) {
+        return res.status(404).json({ message: "Staff account not found" });
+      }
+      if (existingUser.role === "admin") {
+        return res.status(400).json({
+          message: "Clinic admins already have billing access.",
+        });
+      }
+      if (existingUser.role === "billing_staff") {
+        return res.status(409).json({
+          message:
+            "This is a legacy Billing Staff account. Create a new account with the staff member's primary role and grant billing access.",
+        });
+      }
+
+      const updatedUser = await prisma.user.update({
+        where: { id: existingUser.id },
+        data: { canAccessBilling: req.body.canAccessBilling },
+        include: { clinic: true },
+      });
+      await logAuditEvent(req, {
+        action: "user.update",
+        resourceType: "user",
+        resourceId: updatedUser.id,
+        metadata: {
+          updatedFields: ["canAccessBilling"],
+          canAccessBilling: updatedUser.canAccessBilling,
+        },
+      });
+
+      res.json({
+        message: updatedUser.canAccessBilling
+          ? "Billing access granted."
+          : "Billing access revoked.",
+        user: serializeUser(updatedUser),
+      });
+    } catch (error) {
+      console.error("Update staff billing access error:", error);
+      res.status(500).json({ message: "Failed to update billing access." });
     }
   },
 );

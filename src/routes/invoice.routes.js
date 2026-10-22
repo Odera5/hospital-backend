@@ -1,6 +1,6 @@
 import express from "express";
 import { verifyToken } from "../middleware/verifyToken.js";
-import { authorizeRoles } from "../middleware/authorize.js";
+import { authorizeBillingAccess, authorizeRoles } from "../middleware/authorize.js";
 import { enforceSubscriptionState } from "../middleware/subscriptionStateGuard.js";
 import {
   getCashReconciliations,
@@ -25,7 +25,7 @@ import { validateInvoice } from "../middleware/validators.js";
 const router = express.Router();
 
 router.use(verifyToken);
-router.use(authorizeRoles("admin", "billing_staff"));
+router.use(authorizeBillingAccess);
 router.use(enforceSubscriptionState({ allowAdminReadOnly: true }));
 router.use(autoUpdateOverdueInvoices);
 

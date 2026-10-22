@@ -35,6 +35,7 @@ export const protect = async (req, res, next) => {
         u.name,
         u.email,
         u.role,
+        u."canAccessBilling",
         u."assignedBranchIds",
         u."isActive",
         u."emailVerified",
@@ -143,6 +144,22 @@ export const authorizeRoles = (...roles) => (req, res, next) => {
       .json({
         message: `Role (${req.user.role}) not authorized to access this resource`,
       });
+  }
+
+  next();
+};
+
+export const authorizeBillingAccess = (req, res, next) => {
+  if (!req.user) return res.status(401).json({ message: "Unauthorized" });
+
+  if (
+    req.user.role !== "admin" &&
+    !req.user.canAccessBilling &&
+    req.user.role !== "billing_staff"
+  ) {
+    return res.status(403).json({
+      message: "Billing access has not been granted to this account.",
+    });
   }
 
   next();

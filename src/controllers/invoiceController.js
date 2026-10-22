@@ -274,7 +274,7 @@ export const createInvoice = async (req, res) => {
     const tax = subtotal * ((Number(taxPercentage) || 0) / 100);
     const total = subtotal + tax - (Number(discount) || 0);
 
-    if (req.user.role === "billing_staff" && Number(discount) > 0) {
+    if (req.user.role !== "admin" && Number(discount) > 0) {
       return res.status(403).json({
         message: "Discounts require a clinic admin to create or approve the invoice.",
       });
@@ -353,7 +353,7 @@ export const updateInvoice = async (req, res) => {
       taxPercentage !== undefined ? Number(taxPercentage) : invoice.taxPercentage;
     const nextDiscount =
       discount !== undefined ? Number(discount) : invoice.discount;
-    if (req.user.role === "billing_staff" && nextDiscount > 0) {
+    if (req.user.role !== "admin" && nextDiscount > 0) {
       return res.status(403).json({
         message: "Discounts require a clinic admin to create or approve the invoice.",
       });
