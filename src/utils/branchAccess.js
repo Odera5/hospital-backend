@@ -1,4 +1,5 @@
 import { prisma } from "../lib/prisma.js";
+import { hasEnterpriseAccess } from "./subscriptionAccess.js";
 
 export const STAFF_BRANCH_ACCESS_MESSAGE =
   "No branch has been assigned to this staff account. Contact an admin to assign a branch.";
@@ -55,6 +56,17 @@ export const getAllowedActiveBranches = async ({
   );
 
   return branches.filter((branch) => normalizedAssignedBranchIds.includes(branch.id));
+};
+
+export const getAccessiblePatientBranchIds = (user) => {
+  if (!hasEnterpriseAccess(user?.clinic)) {
+    return user?.branchId ? [user.branchId] : [];
+  }
+
+  const branches = Array.isArray(user?.availableBranches)
+    ? user.availableBranches
+    : [];
+  return branches.map((branch) => branch.id).filter(Boolean);
 };
 
 export const resolveActiveBranch = (branches, requestedBranchId = "") => {

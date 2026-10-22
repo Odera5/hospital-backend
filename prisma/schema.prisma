@@ -49,6 +49,7 @@ model Patient {
   lastBirthdayGreetingYear Int?          @default(0)
   email                    String        @default("")
   gender                   String        @default("other")
+  occupation               String        @default("")
   phone                    String        @default("")
   address                  String        @default("")
   nextOfKinName            String        @default("")
@@ -87,6 +88,7 @@ model PendingIntake {
   age                   String
   dateOfBirth           String?   @default("")
   gender                String    @default("other")
+  occupation            String    @default("")
   phone                 String    @default("")
   email                 String    @default("")
   address               String    @default("")
@@ -164,6 +166,7 @@ model Branch {
   appointments      Appointment[]
   waitingEntries    WaitingRoom[]
   invoices          Invoice[]
+  auditLogs         AuditLog[]
 
   @@unique([clinicId, slug])
   @@index([clinicId, isActive, createdAt])
@@ -320,15 +323,18 @@ model AuditLog {
   resourceType String
   resourceId   String   @default("")
   patientId    String?
+  branchId     String?
   metadata     Json     @default("{}")
   ipAddress    String   @default("")
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   actor        User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
   patient      Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+  branch       Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
 
   @@index([resourceType, resourceId, createdAt])
   @@index([patientId, createdAt])
+  @@index([branchId, createdAt])
 }
 
 model BillingWebhook {

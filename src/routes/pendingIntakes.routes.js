@@ -210,6 +210,7 @@ router.post("/:id/approve", protect, authorizeRoles("admin", "branch_manager", "
                 age: pendingIntake.age,
                 dateOfBirth: pendingIntake.dateOfBirth,
                 gender: pendingIntake.gender,
+                occupation: pendingIntake.occupation,
                 phone: pendingIntake.phone,
                 address: pendingIntake.address,
                 email: pendingIntake.email,

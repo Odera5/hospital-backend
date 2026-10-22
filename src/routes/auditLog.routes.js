@@ -6,27 +6,43 @@ import { decryptPatientValue } from "../utils/patientCrypto.js";
 const router = express.Router();
 
 router.use(protect);
-router.use(authorizeRoles("admin"));
+router.use(authorizeRoles("admin", "branch_manager"));
 
 // Fetch paginated and filtered audit logs
 router.get("/", async (req, res) => {
   try {
+    if (req.user.role === "branch_manager" && !req.user.branchId) {
+      return res.status(403).json({ message: "Select an active branch to view its activity logs" });
+    }
+
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
     const skip = (page - 1) * limit;
 
     const { action, resourceType, actorId, search, startDate, endDate } = req.query;
+    const requestedBranchId =
+      req.user.role === "admin" ? String(req.query.branchId || "").trim() : "";
 
     const clinicScopeWhere = {
       OR: [
         { actor: { clinicId: req.user.clinicId } },
         { patient: { clinicId: req.user.clinicId } },
+        { branch: { clinicId: req.user.clinicId } },
       ],
+    };
+    const branchScopeWhere =
+      req.user.role === "branch_manager"
+        ? { branchId: req.user.branchId }
+        : requestedBranchId
+          ? { branchId: requestedBranchId }
+          : {};
+    const filterScopeWhere = {
+      AND: [clinicScopeWhere, branchScopeWhere],
     };
 
     const where = {
       AND: [
-        clinicScopeWhere,
+        filterScopeWhere,
         {
           ...(action ? { action: String(action) } : {}),
           ...(resourceType ? { resourceType: String(resourceType) } : {}),
@@ -54,7 +70,7 @@ router.get("/", async (req, res) => {
       ],
     };
 
-    const [logs, total, actionsGroup, resourcesGroup, actors] = await Promise.all([
+    const [logs, total, actionsGroup, resourcesGroup, actors, branches] = await Promise.all([
       prisma.auditLog.findMany({
         where,
         include: {
@@ -73,6 +89,12 @@ router.get("/", async (req, res) => {
               cardNumber: true,
             },
           },
+          branch: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
         },
         orderBy: { createdAt: "desc" },
         skip,
@@ -81,20 +103,35 @@ router.get("/", async (req, res) => {
       prisma.auditLog.count({ where }),
       prisma.auditLog.groupBy({
         by: ["action"],
-        where: clinicScopeWhere,
+        where: filterScopeWhere,
       }),
       prisma.auditLog.groupBy({
         by: ["resourceType"],
-        where: clinicScopeWhere,
+        where: filterScopeWhere,
       }),
       prisma.user.findMany({
-        where: { clinicId: req.user.clinicId },
+        where: {
+          clinicId: req.user.clinicId,
+          ...(req.user.role === "branch_manager"
+            ? { assignedBranchIds: { has: req.user.branchId } }
+            : {}),
+        },
         select: {
           id: true,
           name: true,
           email: true,
           role: true,
         },
+        orderBy: { name: "asc" },
+      }),
+      prisma.branch.findMany({
+        where: {
+          clinicId: req.user.clinicId,
+          ...(req.user.role === "branch_manager"
+            ? { id: req.user.branchId }
+            : {}),
+        },
+        select: { id: true, name: true },
         orderBy: { name: "asc" },
       }),
     ]);
@@ -121,6 +158,7 @@ router.get("/", async (req, res) => {
         actions: actionsGroup.map((g) => g.action).filter(Boolean),
         resourceTypes: resourcesGroup.map((g) => g.resourceType).filter(Boolean),
         actors,
+        branches,
       },
     });
   } catch (error) {

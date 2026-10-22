@@ -137,6 +137,7 @@ router.post("/", authorizeRoles("admin"), validateBranchPayload, async (req, res
       action: "branch.create",
       resourceType: "branch",
       resourceId: branch.id,
+      branchId: branch.id,
       metadata: {
         name: branch.name,
         city: branch.city,
@@ -212,6 +213,7 @@ router.put("/:id", authorizeRoles("admin"), validateBranchPayload, async (req, r
       action: "branch.update",
       resourceType: "branch",
       resourceId: branch.id,
+      branchId: branch.id,
       metadata: {
         updatedFields: Object.keys(req.body),
       },
@@ -234,6 +236,12 @@ router.patch("/:id/status", authorizeRoles("admin"), async (req, res) => {
       return res.status(error.status).json(error);
     }
 
+    if (typeof req.body?.isActive !== "boolean") {
+      return res.status(400).json({
+        message: "isActive must be a boolean.",
+      });
+    }
+
     const existingBranch = await prisma.branch.findFirst({
       where: {
         id: req.params.id,
@@ -251,10 +259,47 @@ router.patch("/:id/status", authorizeRoles("admin"), async (req, res) => {
       });
     }
 
+    if (existingBranch.isActive && !req.body.isActive) {
+      const [activeBranches, assignedStaff] = await Promise.all([
+        prisma.branch.findMany({
+          where: {
+            clinicId: req.user.clinicId,
+            isActive: true,
+            id: { not: existingBranch.id },
+          },
+          select: { id: true },
+        }),
+        prisma.user.findMany({
+          where: {
+            clinicId: req.user.clinicId,
+            isActive: true,
+            role: { not: "admin" },
+            assignedBranchIds: { has: existingBranch.id },
+          },
+          select: { id: true, assignedBranchIds: true },
+        }),
+      ]);
+      const remainingBranchIds = new Set(activeBranches.map(({ id }) => id));
+      const staffWithoutActiveBranch = assignedStaff.filter(
+        (staff) =>
+          !staff.assignedBranchIds.some((branchId) =>
+            remainingBranchIds.has(branchId),
+          ),
+      );
+
+      if (staffWithoutActiveBranch.length > 0) {
+        return res.status(409).json({
+          code: "BRANCH_STAFF_LOCKOUT",
+          message:
+            "This branch cannot be deactivated while active staff have no other active assigned branch. Reassign those staff first.",
+        });
+      }
+    }
+
     const branch = await prisma.branch.update({
       where: { id: existingBranch.id },
       data: {
-        isActive: Boolean(req.body?.isActive),
+        isActive: req.body.isActive,
       },
     });
 
@@ -262,6 +307,7 @@ router.patch("/:id/status", authorizeRoles("admin"), async (req, res) => {
       action: "branch.update",
       resourceType: "branch",
       resourceId: branch.id,
+      branchId: branch.id,
       metadata: {
         isActive: branch.isActive,
       },

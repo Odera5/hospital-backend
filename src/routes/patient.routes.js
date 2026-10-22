@@ -7,7 +7,11 @@ import { protect, authorizeRoles } from "../middleware/authorize.js";
 import { requireProOrEnterprise } from "../middleware/subscriptionGuard.js";
 import { enforceSubscriptionState } from "../middleware/subscriptionStateGuard.js";
 import upload from "../middleware/upload.js";
-import { logAuditEvent } from "../services/auditLog.js";
+import {
+  isAuditLogUnavailable,
+  requireAuditEvent,
+  withAuditedTransaction,
+} from "../services/auditLog.js";
 import {
   toDecryptedPatient,
   toEncryptedPatientData,
@@ -15,6 +19,8 @@ import {
 import { serializeRecord } from "../utils/serializers.js";
 import { generatePresignedUrl, deleteObjectFromS3 } from "../lib/s3.js";
 import { validatePatient } from "../middleware/validators.js";
+import { getAccessiblePatientBranchIds } from "../utils/branchAccess.js";
+import { hasEnterpriseAccess } from "../utils/subscriptionAccess.js";
 import {
   buildPatientSearchIndexData,
   clinicHasPendingPatientSearchBackfill,
@@ -23,6 +29,12 @@ import {
 const router = express.Router();
 router.use(protect);
 router.use(enforceSubscriptionState({ allowAdminReadOnly: true }));
+
+const respondAuditUnavailable = (res, error) => {
+  if (!isAuditLogUnavailable(error)) return false;
+  res.status(503).json({ message: error.message });
+  return true;
+};
 
 const normalizeText = (value) =>
   typeof value === "string" ? value.trim() : "";
@@ -368,31 +380,44 @@ const createPatientWithGeneratedCardNumber = async ({
   clinicId,
   branchId,
   patientData,
+  req,
 }) => {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
-      const aggregate = await prisma.patient.aggregate({
-        where: { clinicId },
-        _max: { cardNumberSequence: true },
-      });
+      return await withAuditedTransaction(
+        req,
+        (patient) => ({
+          action: "patient.create",
+          resourceType: "patient",
+          resourceId: patient.id,
+          patientId: patient.id,
+          metadata: { gender: patient.gender, age: patient.age },
+        }),
+        async (transaction) => {
+          const aggregate = await transaction.patient.aggregate({
+            where: { clinicId },
+            _max: { cardNumberSequence: true },
+          });
 
-      const nextSequence = (aggregate._max.cardNumberSequence || 0) + 1;
+          const nextSequence = (aggregate._max.cardNumberSequence || 0) + 1;
 
-      return await prisma.patient.create({
-        data: {
-          clinicId,
-          branchId,
-          cardNumberSequence: nextSequence,
-          ...buildPatientSearchIndexData({
-            ...patientData,
-            cardNumber: formatCardNumber(nextSequence),
-          }),
-          ...toEncryptedPatientData({
-            ...patientData,
-            cardNumber: formatCardNumber(nextSequence),
-          }),
+          return transaction.patient.create({
+            data: {
+              clinicId,
+              branchId,
+              cardNumberSequence: nextSequence,
+              ...buildPatientSearchIndexData({
+                ...patientData,
+                cardNumber: formatCardNumber(nextSequence),
+              }),
+              ...toEncryptedPatientData({
+                ...patientData,
+                cardNumber: formatCardNumber(nextSequence),
+              }),
+            },
+          });
         },
-      });
+      );
     } catch (error) {
       if (isPatientCardSequenceConflict(error) && attempt < 4) {
         continue;
@@ -405,8 +430,17 @@ const createPatientWithGeneratedCardNumber = async ({
   throw new Error("Failed to generate a unique patient card number");
 };
 
-const getPatientOr404 = async (id, clinicId, branchId) => {
-  const patient = await prisma.patient.findFirst({ where: { id, clinicId } });
+const getPatientOr404 = async (id, user) => {
+  const accessibleBranchIds = getAccessiblePatientBranchIds(user);
+  if (accessibleBranchIds.length === 0) return null;
+
+  const patient = await prisma.patient.findFirst({
+    where: {
+      id,
+      clinicId: user.clinicId,
+      branchId: { in: accessibleBranchIds },
+    },
+  });
   if (!patient || patient.isDeleted) return null;
   return patient;
 };
@@ -421,13 +455,19 @@ router.get(
       const branchId = req.user.branchId;
       const search = normalizeText(req.query.search).toLowerCase();
       const isGlobal =
-        req.query.global === "true" && req.user.clinic?.plan === "ENTERPRISE";
+        req.query.global === "true" &&
+        hasEnterpriseAccess(req.user.clinic) &&
+        Boolean(req.user.availableBranches?.length);
       const limit = Math.min(parsePositiveInteger(req.query.limit, 20), 100);
 
       const baseWhere = {
         clinicId,
         isDeleted: false,
-        ...(isGlobal ? {} : { branchId }),
+        ...(isGlobal && req.user.role === "admin"
+          ? {}
+          : isGlobal
+            ? { branchId: { in: getAccessiblePatientBranchIds(req.user) } }
+            : { branchId }),
       };
       const selectedFields = {
         id: true,
@@ -461,8 +501,14 @@ router.get(
         })
         .slice(0, limit);
 
+      await requireAuditEvent(req, {
+        action: "patient.directory_access",
+        resourceType: "patient",
+        metadata: { resultCount: options.length, globalSearch: isGlobal },
+      });
       res.json(options);
     } catch (error) {
+      if (respondAuditUnavailable(res, error)) return;
       console.error("Get patient picker error:", error);
       res.status(500).json({ message: "Failed to fetch patient options" });
     }
@@ -492,11 +538,17 @@ router.get(
         pageParam !== undefined || limitParam !== undefined;
 
       const isGlobal =
-        req.query.global === "true" && req.user.clinic?.plan === "ENTERPRISE";
+        req.query.global === "true" &&
+        hasEnterpriseAccess(req.user.clinic) &&
+        Boolean(req.user.availableBranches?.length);
       const baseWhere = {
         clinicId,
         isDeleted: false,
-        ...(isGlobal ? {} : { branchId }),
+        ...(isGlobal && req.user.role === "admin"
+          ? {}
+          : isGlobal
+            ? { branchId: { in: getAccessiblePatientBranchIds(req.user) } }
+            : { branchId }),
       };
 
       if (!shouldPaginate) {
@@ -505,6 +557,11 @@ router.get(
           orderBy: { createdAt: "desc" },
         });
 
+        await requireAuditEvent(req, {
+          action: "patient.directory_access",
+          resourceType: "patient",
+          metadata: { resultCount: patients.length, globalSearch: isGlobal },
+        });
         return res.json(patients.map(toDecryptedPatient));
       }
 
@@ -536,6 +593,11 @@ router.get(
           }),
         ]);
 
+        await requireAuditEvent(req, {
+          action: "patient.directory_access",
+          resourceType: "patient",
+          metadata: { resultCount: patients.length, globalSearch: isGlobal },
+        });
         return res.json({
           data: patients.map(toDecryptedPatient),
           page,
@@ -573,6 +635,11 @@ router.get(
       const total = sortedPatients.length;
       const paginatedPatients = sortedPatients.slice(skip, skip + limit);
 
+      await requireAuditEvent(req, {
+        action: "patient.directory_access",
+        resourceType: "patient",
+        metadata: { resultCount: paginatedPatients.length, globalSearch: isGlobal },
+      });
       return res.json({
         data: paginatedPatients,
         page,
@@ -581,6 +648,7 @@ router.get(
         totalPages: Math.max(1, Math.ceil(total / limit)),
       });
     } catch (error) {
+      if (respondAuditUnavailable(res, error)) return;
       console.error("Get patients error:", error);
       res.status(500).json({
         message: "Failed to fetch patients",
@@ -608,7 +676,8 @@ router.get("/trash/all", protect, authorizeRoles("admin"), async (req, res) => {
     );
     const shouldPaginate = pageParam !== undefined || limitParam !== undefined;
     const isGlobal =
-      req.query.global === "true" && req.user.clinic?.plan === "ENTERPRISE";
+      req.query.global === "true" &&
+      hasEnterpriseAccess(req.user.clinic);
     const baseWhere = {
       clinicId,
       isDeleted: true,
@@ -621,6 +690,11 @@ router.get("/trash/all", protect, authorizeRoles("admin"), async (req, res) => {
         orderBy: { updatedAt: "desc" },
       });
 
+      await requireAuditEvent(req, {
+        action: "patient.trash_access",
+        resourceType: "patient",
+        metadata: { resultCount: trash.length, globalSearch: isGlobal },
+      });
       return res.json(trash.map(toDecryptedPatient));
     }
 
@@ -652,6 +726,11 @@ router.get("/trash/all", protect, authorizeRoles("admin"), async (req, res) => {
         }),
       ]);
 
+      await requireAuditEvent(req, {
+        action: "patient.trash_access",
+        resourceType: "patient",
+        metadata: { resultCount: trash.length, globalSearch: isGlobal },
+      });
       return res.json({
         data: trash.map(toDecryptedPatient),
         page,
@@ -686,6 +765,11 @@ router.get("/trash/all", protect, authorizeRoles("admin"), async (req, res) => {
     const total = sortedPatients.length;
     const paginatedPatients = sortedPatients.slice(skip, skip + limit);
 
+    await requireAuditEvent(req, {
+      action: "patient.trash_access",
+      resourceType: "patient",
+      metadata: { resultCount: paginatedPatients.length, globalSearch: isGlobal },
+    });
     return res.json({
       data: paginatedPatients,
       page,
@@ -694,6 +778,7 @@ router.get("/trash/all", protect, authorizeRoles("admin"), async (req, res) => {
       totalPages: Math.max(1, Math.ceil(total / limit)),
     });
   } catch (error) {
+    if (respondAuditUnavailable(res, error)) return;
     console.error("Get trash error:", error);
     res.status(500).json({ message: "Failed to fetch trash" });
   }
@@ -715,6 +800,7 @@ router.put(
         where: {
           id: { in: ids },
           clinicId: req.user.clinicId,
+          branchId: { in: getAccessiblePatientBranchIds(req.user) },
           isDeleted: true,
         },
       });
@@ -727,26 +813,29 @@ router.put(
 
       const restoredIds = patientsToRestore.map((p) => p.id);
 
-      await prisma.patient.updateMany({
-        where: { id: { in: restoredIds } },
-        data: { isDeleted: false },
-      });
-
-      for (const p of patientsToRestore) {
-        await logAuditEvent(req, {
+      await withAuditedTransaction(
+        req,
+        patientsToRestore.map((p) => ({
           action: "patient.update",
           resourceType: "patient",
           resourceId: p.id,
           patientId: p.id,
+          branchId: p.branchId,
           metadata: { restored: true, bulk: true },
-        });
-      }
+        })),
+        (transaction) =>
+          transaction.patient.updateMany({
+            where: { id: { in: restoredIds } },
+            data: { isDeleted: false },
+          }),
+      );
 
       res.json({
         message: `${restoredIds.length} patient(s) restored successfully`,
         restoredIds,
       });
     } catch (error) {
+      if (respondAuditUnavailable(res, error)) return;
       console.error("Bulk restore error:", error);
       res.status(500).json({ message: "Failed to restore patients" });
     }
@@ -769,6 +858,7 @@ router.delete(
         where: {
           id: { in: ids },
           clinicId: req.user.clinicId,
+          branchId: { in: getAccessiblePatientBranchIds(req.user) },
           isDeleted: true,
         },
       });
@@ -781,25 +871,28 @@ router.delete(
 
       const deleteIds = patientsToDelete.map((p) => p.id);
 
-      await prisma.patient.deleteMany({
-        where: { id: { in: deleteIds } },
-      });
-
-      for (const p of patientsToDelete) {
-        await logAuditEvent(req, {
+      await withAuditedTransaction(
+        req,
+        patientsToDelete.map((p) => ({
           action: "patient.delete",
           resourceType: "patient",
           resourceId: p.id,
           patientId: p.id,
+          branchId: p.branchId,
           metadata: { permanent: true, bulk: true },
-        });
-      }
+        })),
+        (transaction) =>
+          transaction.patient.deleteMany({
+            where: { id: { in: deleteIds } },
+          }),
+      );
 
       res.json({
         message: `${deleteIds.length} patient(s) permanently deleted successfully`,
         deleteIds,
       });
     } catch (error) {
+      if (respondAuditUnavailable(res, error)) return;
       console.error("Bulk permanent delete error:", error);
       res
         .status(500)
@@ -816,14 +909,20 @@ router.get(
     try {
       const patient = await getPatientOr404(
         req.params.id,
-        req.user.clinicId,
-        req.user.branchId,
+        req.user,
       );
       if (!patient)
         return res.status(404).json({ message: "Patient not found" });
 
+      await requireAuditEvent(req, {
+        action: "patient.view",
+        resourceType: "patient",
+        resourceId: patient.id,
+        patientId: patient.id,
+      });
       res.json(toDecryptedPatient(patient));
     } catch (error) {
+      if (respondAuditUnavailable(res, error)) return;
       console.error("Get patient error:", error);
       res.status(500).json({ message: "Server error" });
     }
@@ -841,6 +940,7 @@ router.post(
       const age = normalizeText(req.body?.age);
       const dateOfBirth = normalizeText(req.body?.dateOfBirth);
       const gender = normalizeText(req.body?.gender) || "other";
+      const occupation = normalizeText(req.body?.occupation);
       const phone = normalizeText(req.body?.phone);
       const address = normalizeText(req.body?.address);
       const email = normalizeText(req.body?.email);
@@ -870,6 +970,7 @@ router.post(
           age,
           dateOfBirth,
           gender,
+          occupation,
           phone,
           address,
           email,
@@ -878,21 +979,12 @@ router.post(
           nextOfKinRelationship,
           nextOfKinAddress,
         },
-      });
-
-      await logAuditEvent(req, {
-        action: "patient.create",
-        resourceType: "patient",
-        resourceId: patient.id,
-        patientId: patient.id,
-        metadata: {
-          gender: patient.gender,
-          age: patient.age,
-        },
+        req,
       });
 
       res.status(201).json(toDecryptedPatient(patient));
     } catch (error) {
+      if (respondAuditUnavailable(res, error)) return;
       console.error("Create patient error:", error);
 
       if (error instanceof Prisma.PrismaClientValidationError) {
@@ -1009,25 +1101,27 @@ router.post(
         };
       });
 
-      const created = await prisma.patient.createMany({
-        data: newPatients,
-        skipDuplicates: true,
-      });
-
-      await logAuditEvent(req, {
-        action: "patient.create",
-        resourceType: "patient",
-        resourceId: "bulk_import",
-        metadata: {
-          importedCount: created.count,
-        },
-      });
+      const created = await withAuditedTransaction(
+        req,
+        (result) => ({
+          action: "patient.create",
+          resourceType: "patient",
+          resourceId: "bulk_import",
+          metadata: { importedCount: result.count },
+        }),
+        (transaction) =>
+          transaction.patient.createMany({
+            data: newPatients,
+            skipDuplicates: true,
+          }),
+      );
 
       res.status(201).json({
         message: "Patients imported successfully",
         count: created.count,
       });
     } catch (error) {
+      if (respondAuditUnavailable(res, error)) return;
       console.error("Import patients error:", error);
       res.status(500).json({ message: "Failed to bulk import patients" });
     }
@@ -1043,8 +1137,7 @@ router.put(
     try {
       const existingPatient = await getPatientOr404(
         req.params.id,
-        req.user.clinicId,
-        req.user.branchId,
+        req.user,
       );
       if (!existingPatient) {
         return res.status(404).json({ message: "Patient not found" });
@@ -1061,6 +1154,7 @@ router.put(
         age: updates.age,
         dateOfBirth: updates.dateOfBirth,
         gender: updates.gender,
+        occupation: updates.occupation,
         phone: updates.phone,
         address: updates.address,
         email: updates.email,
@@ -1079,26 +1173,30 @@ router.put(
       // Retain the already-encrypted cardNumber to prevent double-encryption.
       encryptedData.cardNumber = existingPatient.cardNumber;
 
-      const patient = await prisma.patient.update({
-        where: { id: existingPatient.id },
-        data: {
-          ...encryptedData,
-          ...patientSearchIndexData,
-        },
-      });
-
-      await logAuditEvent(req, {
-        action: "patient.update",
-        resourceType: "patient",
-        resourceId: patient.id,
-        patientId: patient.id,
-        metadata: {
-          updatedFields: Object.keys(req.body),
-        },
-      });
+      const patient = await withAuditedTransaction(
+        req,
+        (updatedPatient) => ({
+          action: "patient.update",
+          resourceType: "patient",
+          resourceId: updatedPatient.id,
+          patientId: updatedPatient.id,
+          metadata: {
+            updatedFields: Object.keys(req.body),
+          },
+        }),
+        (transaction) =>
+          transaction.patient.update({
+            where: { id: existingPatient.id },
+            data: {
+              ...encryptedData,
+              ...patientSearchIndexData,
+            },
+          }),
+      );
 
       res.json(toDecryptedPatient(patient));
     } catch (error) {
+      if (respondAuditUnavailable(res, error)) return;
       console.error("Update patient error:", error);
       res.status(500).json({ message: "Server error" });
     }
@@ -1113,30 +1211,33 @@ router.delete(
     try {
       const patient = await getPatientOr404(
         req.params.id,
-        req.user.clinicId,
-        req.user.branchId,
+        req.user,
       );
       if (!patient)
         return res.status(404).json({ message: "Patient not found" });
 
-      const updatedPatient = await prisma.patient.update({
-        where: { id: patient.id },
-        data: { isDeleted: true },
-      });
-
-      await logAuditEvent(req, {
-        action: "patient.delete",
-        resourceType: "patient",
-        resourceId: patient.id,
-        patientId: patient.id,
-        metadata: { softDelete: true },
-      });
+      const updatedPatient = await withAuditedTransaction(
+        req,
+        {
+          action: "patient.delete",
+          resourceType: "patient",
+          resourceId: patient.id,
+          patientId: patient.id,
+          metadata: { softDelete: true },
+        },
+        (transaction) =>
+          transaction.patient.update({
+            where: { id: patient.id },
+            data: { isDeleted: true },
+          }),
+      );
 
       res.json({
         message: "Patient moved to Trash",
         patient: toDecryptedPatient(updatedPatient),
       });
     } catch (error) {
+      if (respondAuditUnavailable(res, error)) return;
       console.error("Soft delete error:", error);
       res.status(500).json({ message: "Server error" });
     }
@@ -1162,24 +1263,28 @@ router.put(
         return res.status(404).json({ message: "Patient not found in Trash" });
       }
 
-      const restoredPatient = await prisma.patient.update({
-        where: { id: req.params.id },
-        data: { isDeleted: false },
-      });
-
-      await logAuditEvent(req, {
-        action: "patient.update",
-        resourceType: "patient",
-        resourceId: restoredPatient.id,
-        patientId: restoredPatient.id,
-        metadata: { restored: true },
-      });
+      const restoredPatient = await withAuditedTransaction(
+        req,
+        {
+          action: "patient.update",
+          resourceType: "patient",
+          resourceId: patient.id,
+          patientId: patient.id,
+          metadata: { restored: true },
+        },
+        (transaction) =>
+          transaction.patient.update({
+            where: { id: req.params.id },
+            data: { isDeleted: false },
+          }),
+      );
 
       res.json({
         message: "Patient restored successfully",
         patient: toDecryptedPatient(restoredPatient),
       });
     } catch (error) {
+      if (respondAuditUnavailable(res, error)) return;
       console.error("Restore patient error:", error);
       res.status(500).json({ message: "Server error" });
     }
@@ -1209,18 +1314,22 @@ router.delete(
         });
       }
 
-      await prisma.patient.delete({ where: { id: req.params.id } });
-
-      await logAuditEvent(req, {
-        action: "patient.delete",
-        resourceType: "patient",
-        resourceId: patient.id,
-        patientId: patient.id,
-        metadata: { permanent: true },
-      });
+      await withAuditedTransaction(
+        req,
+        {
+          action: "patient.delete",
+          resourceType: "patient",
+          resourceId: patient.id,
+          patientId: patient.id,
+          metadata: { permanent: true },
+        },
+        (transaction) =>
+          transaction.patient.delete({ where: { id: req.params.id } }),
+      );
 
       res.json({ message: "Patient permanently deleted" });
     } catch (error) {
+      if (respondAuditUnavailable(res, error)) return;
       console.error("Permanent delete error:", error);
       res.status(500).json({ message: "Server error" });
     }
@@ -1236,8 +1345,7 @@ router.post(
     try {
       const patient = await getPatientOr404(
         req.params.id,
-        req.user.clinicId,
-        req.user.branchId,
+        req.user,
       );
       if (!patient)
         return res.status(404).json({ message: "Patient not found" });
@@ -1294,51 +1402,55 @@ router.post(
         ...newFileAttachments,
       ]);
 
-      const record = await prisma.record.create({
-        data: {
+      const record = await withAuditedTransaction(
+        req,
+        (createdRecord) => ({
+          action: "record.create",
+          resourceType: "record",
+          resourceId: createdRecord.id,
           patientId: patient.id,
-          presentingComplaint,
-          diagnosis,
-          treatmentPlan,
-          history: history || "",
-          examination: buildExaminationSummary({
-            examination,
-            examinationExtraOral,
-            softTissue,
-            periodontalStatus,
-            occlusion,
+          metadata: {
+            dentition: createdRecord.dentition,
+            attachmentCount: attachments.length,
+            consentObtained: createdRecord.consentObtained,
+          },
+        }),
+        (transaction) =>
+          transaction.record.create({
+            data: {
+              patientId: patient.id,
+              presentingComplaint,
+              diagnosis,
+              treatmentPlan,
+              history: history || "",
+              examination: buildExaminationSummary({
+                examination,
+                examinationExtraOral,
+                softTissue,
+                periodontalStatus,
+                occlusion,
+              }),
+              examinationExtraOral: examinationExtraOral || "",
+              softTissue: softTissue || "",
+              periodontalStatus: periodontalStatus || "",
+              occlusion: occlusion || "",
+              investigation: investigation || "",
+              medication: medication || "",
+              allergies: allergies || "",
+              comorbidities: comorbidities || "",
+              currentMedication: currentMedication || "",
+              ...normalizedConsent,
+              dentition: normalizeDentition(dentition),
+              teeth: normalizeTeeth(teeth),
+              vitals: normalizeVitals(vitals),
+              attachments,
+            },
           }),
-          examinationExtraOral: examinationExtraOral || "",
-          softTissue: softTissue || "",
-          periodontalStatus: periodontalStatus || "",
-          occlusion: occlusion || "",
-          investigation: investigation || "",
-          medication: medication || "",
-          allergies: allergies || "",
-          comorbidities: comorbidities || "",
-          currentMedication: currentMedication || "",
-          ...normalizedConsent,
-          dentition: normalizeDentition(dentition),
-          teeth: normalizeTeeth(teeth),
-          vitals: normalizeVitals(vitals),
-          attachments,
-        },
-      });
-
-      await logAuditEvent(req, {
-        action: "record.create",
-        resourceType: "record",
-        resourceId: record.id,
-        patientId: patient.id,
-        metadata: {
-          dentition: record.dentition,
-          attachmentCount: attachments.length,
-          consentObtained: record.consentObtained,
-        },
-      });
+      );
 
       res.status(201).json(serializeRecord(record));
     } catch (error) {
+      if (respondAuditUnavailable(res, error)) return;
       console.error("Add record error:", error);
       res
         .status(500)
@@ -1356,8 +1468,7 @@ router.put(
     try {
       const patient = await getPatientOr404(
         req.params.id,
-        req.user.clinicId,
-        req.user.branchId,
+        req.user,
       );
       if (!patient)
         return res.status(404).json({ message: "Patient not found" });
@@ -1411,17 +1522,6 @@ router.put(
         .map((name) => path.basename(String(name || "")))
         .filter(Boolean);
 
-      for (const name of removedNames) {
-        try {
-          await deleteObjectFromS3(`records/${name}`);
-        } catch (err) {
-          console.error("Failed to delete from S3:", err);
-        }
-        // Fallback for old local files
-        const filePath = getLegacyRecordFilePath(name);
-        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      }
-
       const retainedAttachments = existingAttachments.filter(
         (attachment) => !removedNames.includes(attachment?.name),
       );
@@ -1446,52 +1546,66 @@ router.put(
         ...newFileAttachments,
       ]);
 
-      const updatedRecord = await prisma.record.update({
-        where: { id: record.id },
-        data: {
-          presentingComplaint,
-          diagnosis,
-          treatmentPlan,
-          history: history || "",
-          examination: buildExaminationSummary({
-            examination,
-            examinationExtraOral,
-            softTissue,
-            periodontalStatus,
-            occlusion,
+      const updatedRecord = await withAuditedTransaction(
+        req,
+        (savedRecord) => ({
+          action: "record.update",
+          resourceType: "record",
+          resourceId: savedRecord.id,
+          patientId: patient.id,
+          metadata: {
+            dentition: savedRecord.dentition,
+            removedAttachments: removedNames.length,
+            addedAttachments: newAttachments.length,
+            consentObtained: savedRecord.consentObtained,
+          },
+        }),
+        (transaction) =>
+          transaction.record.update({
+            where: { id: record.id },
+            data: {
+              presentingComplaint,
+              diagnosis,
+              treatmentPlan,
+              history: history || "",
+              examination: buildExaminationSummary({
+                examination,
+                examinationExtraOral,
+                softTissue,
+                periodontalStatus,
+                occlusion,
+              }),
+              examinationExtraOral: examinationExtraOral || "",
+              softTissue: softTissue || "",
+              periodontalStatus: periodontalStatus || "",
+              occlusion: occlusion || "",
+              investigation: investigation || "",
+              medication: medication || "",
+              allergies: allergies || "",
+              comorbidities: comorbidities || "",
+              currentMedication: currentMedication || "",
+              ...normalizedConsent,
+              dentition: normalizeDentition(dentition),
+              teeth: normalizeTeeth(teeth),
+              vitals: normalizeVitals(vitals),
+              attachments: [...retainedAttachments, ...newAttachments],
+            },
           }),
-          examinationExtraOral: examinationExtraOral || "",
-          softTissue: softTissue || "",
-          periodontalStatus: periodontalStatus || "",
-          occlusion: occlusion || "",
-          investigation: investigation || "",
-          medication: medication || "",
-          allergies: allergies || "",
-          comorbidities: comorbidities || "",
-          currentMedication: currentMedication || "",
-          ...normalizedConsent,
-          dentition: normalizeDentition(dentition),
-          teeth: normalizeTeeth(teeth),
-          vitals: normalizeVitals(vitals),
-          attachments: [...retainedAttachments, ...newAttachments],
-        },
-      });
+      );
 
-      await logAuditEvent(req, {
-        action: "record.update",
-        resourceType: "record",
-        resourceId: updatedRecord.id,
-        patientId: patient.id,
-        metadata: {
-          dentition: updatedRecord.dentition,
-          removedAttachments: removedNames.length,
-          addedAttachments: newAttachments.length,
-          consentObtained: updatedRecord.consentObtained,
-        },
-      });
+      for (const name of removedNames) {
+        try {
+          await deleteObjectFromS3(`records/${name}`);
+        } catch (err) {
+          console.error("Failed to delete from S3:", err);
+        }
+        const filePath = getLegacyRecordFilePath(name);
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      }
 
       res.json(serializeRecord(updatedRecord));
     } catch (error) {
+      if (respondAuditUnavailable(res, error)) return;
       console.error("Update record error:", error);
       res
         .status(500)
@@ -1508,8 +1622,7 @@ router.get(
     try {
       const patient = await getPatientOr404(
         req.params.id,
-        req.user.clinicId,
-        req.user.branchId,
+        req.user,
       );
       if (!patient)
         return res.status(404).json({ message: "Patient not found" });
@@ -1530,18 +1643,32 @@ router.get(
         return res.status(404).json({ message: "Attachment not found" });
       }
 
+      let url;
       try {
-        const url = await generatePresignedUrl(`records/${fileName}`);
-        return res.redirect(url);
-      } catch (err) {
-        // Fallback to local files if S3 fails or file is not in S3
+        url = await generatePresignedUrl(`records/${fileName}`);
+      } catch (error) {
+        console.error("Failed to generate attachment URL:", error);
         const filePath = getLegacyRecordFilePath(fileName);
-        if (fs.existsSync(filePath)) {
-          return res.sendFile(filePath);
+        if (!fs.existsSync(filePath)) {
+          return res.status(404).json({ message: "Attachment file not found" });
         }
-        return res.status(404).json({ message: "Attachment file not found" });
+
+        await requireAuditEvent(req, {
+          action: "record.attachment_access",
+          resourceType: "record",
+          patientId: patient.id,
+        });
+        return res.sendFile(filePath);
       }
+
+      await requireAuditEvent(req, {
+        action: "record.attachment_access",
+        resourceType: "record",
+        patientId: patient.id,
+      });
+      return res.redirect(url);
     } catch (error) {
+      if (respondAuditUnavailable(res, error)) return;
       console.error("Get attachment error:", error);
       return res.status(500).json({ message: "Failed to fetch attachment" });
     }
@@ -1556,8 +1683,7 @@ router.get(
     try {
       const patient = await getPatientOr404(
         req.params.id,
-        req.user.clinicId,
-        req.user.branchId,
+        req.user,
       );
       if (!patient)
         return res.status(404).json({ message: "Patient not found" });
@@ -1633,6 +1759,12 @@ router.get(
         prisma.record.count({ where }),
       ]);
 
+      await requireAuditEvent(req, {
+        action: "record.list_access",
+        resourceType: "record",
+        patientId: patient.id,
+        metadata: { resultCount: records.length, includeTrash: isTrash },
+      });
       res.json({
         data: records.map(serializeRecord),
         page,
@@ -1641,6 +1773,7 @@ router.get(
         totalPages: Math.max(1, Math.ceil(total / limit)),
       });
     } catch (error) {
+      if (respondAuditUnavailable(res, error)) return;
       console.error("Get records error:", error);
       res.status(500).json({ message: "Failed to fetch patient records" });
     }
@@ -1655,8 +1788,7 @@ router.delete(
     try {
       const patient = await getPatientOr404(
         req.params.id,
-        req.user.clinicId,
-        req.user.branchId,
+        req.user,
       );
       if (!patient)
         return res.status(404).json({ message: "Patient not found" });
@@ -1671,21 +1803,25 @@ router.delete(
           .json({ message: "Record not found for this patient" });
       }
 
-      await prisma.record.update({
-        where: { id: record.id },
-        data: { isDeleted: true, deletedAt: new Date() },
-      });
-
-      await logAuditEvent(req, {
-        action: "record.delete",
-        resourceType: "record",
-        resourceId: record.id,
-        patientId: patient.id,
-        metadata: { softDelete: true },
-      });
+      await withAuditedTransaction(
+        req,
+        {
+          action: "record.delete",
+          resourceType: "record",
+          resourceId: record.id,
+          patientId: patient.id,
+          metadata: { softDelete: true },
+        },
+        (transaction) =>
+          transaction.record.update({
+            where: { id: record.id },
+            data: { isDeleted: true, deletedAt: new Date() },
+          }),
+      );
 
       res.json({ message: "Record moved to Trash" });
     } catch (error) {
+      if (respondAuditUnavailable(res, error)) return;
       console.error("Soft delete record error:", error);
       res.status(500).json({ message: "Failed to delete record" });
     }
@@ -1700,8 +1836,7 @@ router.patch(
     try {
       const patient = await getPatientOr404(
         req.params.id,
-        req.user.clinicId,
-        req.user.branchId,
+        req.user,
       );
       if (!patient)
         return res.status(404).json({ message: "Patient not found" });
@@ -1716,21 +1851,25 @@ router.patch(
           .json({ message: "Record not found for this patient" });
       }
 
-      const updatedRecord = await prisma.record.update({
-        where: { id: req.params.recordId },
-        data: { isDeleted: false, deletedAt: null },
-      });
-
-      await logAuditEvent(req, {
-        action: "record.update",
-        resourceType: "record",
-        resourceId: updatedRecord.id,
-        patientId: patient.id,
-        metadata: { restored: true },
-      });
+      const updatedRecord = await withAuditedTransaction(
+        req,
+        {
+          action: "record.update",
+          resourceType: "record",
+          resourceId: record.id,
+          patientId: patient.id,
+          metadata: { restored: true },
+        },
+        (transaction) =>
+          transaction.record.update({
+            where: { id: req.params.recordId },
+            data: { isDeleted: false, deletedAt: null },
+          }),
+      );
 
       res.json(serializeRecord(updatedRecord));
     } catch (error) {
+      if (respondAuditUnavailable(res, error)) return;
       console.error("Restore record error:", error);
       res.status(500).json({ message: "Server error" });
     }
@@ -1745,8 +1884,7 @@ router.delete(
     try {
       const patient = await getPatientOr404(
         req.params.id,
-        req.user.clinicId,
-        req.user.branchId,
+        req.user,
       );
       if (!patient)
         return res.status(404).json({ message: "Patient not found" });
@@ -1767,31 +1905,35 @@ router.delete(
         });
       }
 
+      await withAuditedTransaction(
+        req,
+        {
+          action: "record.delete",
+          resourceType: "record",
+          resourceId: record.id,
+          patientId: patient.id,
+          metadata: {
+            attachmentCount: normalizeAttachments(record.attachments).length,
+            permanent: true,
+          },
+        },
+        (transaction) =>
+          transaction.record.delete({ where: { id: record.id } }),
+      );
+
       for (const attachment of normalizeAttachments(record.attachments)) {
         try {
           await deleteObjectFromS3(`records/${attachment.name}`);
         } catch (err) {
           console.error("Failed to delete from S3:", err);
         }
-        // Fallback for old local files
         const filePath = getLegacyRecordFilePath(attachment.name);
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
       }
 
-      await prisma.record.delete({ where: { id: record.id } });
-
-      await logAuditEvent(req, {
-        action: "record.delete",
-        resourceType: "record",
-        resourceId: record.id,
-        patientId: patient.id,
-        metadata: {
-          attachmentCount: normalizeAttachments(record.attachments).length,
-        },
-      });
-
       res.json({ message: "Record permanently deleted" });
     } catch (error) {
+      if (respondAuditUnavailable(res, error)) return;
       console.error("Hard delete record error:", error);
       res.status(500).json({ message: "Failed to delete record" });
     }

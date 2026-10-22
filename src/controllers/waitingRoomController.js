@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { logAuditEvent } from "../services/auditLog.js";
+import { getAccessiblePatientBranchIds } from "../utils/branchAccess.js";
 import { serializeWaitingEntry } from "../utils/serializers.js";
 import { toDecryptedPatient } from "../utils/patientCrypto.js";
 
@@ -118,7 +119,11 @@ export const createWaitingEntry = async (req, res) => {
     }
 
     const patient = await prisma.patient.findFirst({
-      where: { id: patientId, clinicId: req.user.clinicId },
+      where: {
+        id: patientId,
+        clinicId: req.user.clinicId,
+        branchId: { in: getAccessiblePatientBranchIds(req.user) },
+      },
     });
     if (!patient || patient.isDeleted) {
       return res.status(404).json({ message: "Patient not found" });
@@ -127,6 +132,7 @@ export const createWaitingEntry = async (req, res) => {
     const existing = await prisma.waitingRoom.findFirst({
       where: {
         patientId,
+        branchId: req.user.branchId,
         status: {
           in: ["waiting", "called", "in_consultation"],
         },
@@ -160,6 +166,13 @@ export const createWaitingEntry = async (req, res) => {
       prisma.appointment.updateMany({
         where: {
           patientId,
+          OR: [
+            { branchId: req.user.branchId },
+            {
+              branchId: null,
+              patient: { branchId: req.user.branchId },
+            },
+          ],
           status: "scheduled",
           appointmentDate: {
             gte: startOfDay,

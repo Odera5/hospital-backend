@@ -10,6 +10,7 @@
     "start:local": "node src/server.js",
     "dev": "node --watch src/server.js",
     "test:paystack": "node tests/run-paystack-tests.mjs",
+    "test:branch-access": "node --test tests/branch-access.spec.mjs",
     "jobs:process-webhooks": "node src/jobs/processBillingWebhooks.js",
     "worker:webhooks": "node src/workers/webhookWorker.js",
     "migrate:mongo": "node src/scripts/migrateMongoToPostgres.js",

@@ -60,6 +60,7 @@ export function toEncryptedPatientData(data = {}) {
     age: encryptPatientValue(normalizePatientString(data.age, "0")),
     email: encryptPatientValue(normalizePatientString(data.email)),
     gender: normalizePatientString(data.gender, "other") || "other",
+    occupation: encryptPatientValue(normalizePatientString(data.occupation)),
     phone: normalizePatientString(data.phone),
     address: normalizePatientString(data.address),
     nextOfKinName: normalizePatientString(data.nextOfKinName),
@@ -105,6 +106,10 @@ export function toDecryptedPatient(patient) {
         ? decryptPatientValue(patient.dateOfBirth)
         : patient.dateOfBirth || "",
     gender: patient.gender || "other",
+    occupation:
+      typeof patient.occupation === "string"
+        ? decryptPatientValue(patient.occupation)
+        : patient.occupation || "",
     phone: patient.phone || "",
     address: patient.address || "",
     nextOfKinName: patient.nextOfKinName || "",

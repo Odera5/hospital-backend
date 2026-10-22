@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { prisma } from "../lib/prisma.js";
 import { logAuditEvent } from "../services/auditLog.js";
+import { getAccessiblePatientBranchIds } from "../utils/branchAccess.js";
 import { serializeInvoice } from "../utils/serializers.js";
 import { toDecryptedPatient } from "../utils/patientCrypto.js";
 
@@ -239,7 +240,11 @@ export const createInvoice = async (req, res) => {
     }
 
     const patient = await prisma.patient.findFirst({
-      where: { id: patientId, clinicId: req.user.clinicId },
+      where: {
+        id: patientId,
+        clinicId: req.user.clinicId,
+        branchId: { in: getAccessiblePatientBranchIds(req.user) },
+      },
     });
     if (!patient || patient.isDeleted) {
       return res.status(404).json({ message: "Patient not found" });
