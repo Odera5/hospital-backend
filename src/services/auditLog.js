@@ -44,7 +44,12 @@ export const requireAuditEvent = async (req, details) => {
   }
 };
 
-export const withAuditedTransaction = async (req, resolveDetails, operation) =>
+export const withAuditedTransaction = async (
+  req,
+  resolveDetails,
+  operation,
+  options,
+) =>
   prisma.$transaction(async (transaction) => {
     const result = await operation(transaction);
     const details =
@@ -63,7 +68,7 @@ export const withAuditedTransaction = async (req, resolveDetails, operation) =>
     }
 
     return result;
-  });
+  }, options);
 
 export const isAuditLogUnavailable = (error) =>
   error?.code === "AUDIT_LOG_UNAVAILABLE";

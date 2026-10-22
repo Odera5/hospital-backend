@@ -54,7 +54,7 @@ import {
 } from "../utils/branchAccess.js";
 
 const router = express.Router();
-const STAFF_ROLES = ["admin", "branch_manager", "doctor", "nurse"];
+const STAFF_ROLES = ["admin", "branch_manager", "doctor", "nurse", "billing_staff"];
 const STAFF_MANAGER_ROLES = ["admin", "branch_manager"];
 const BRANCH_MANAGER_MANAGEABLE_ROLES = ["doctor", "nurse"];
 const isProduction = process.env.NODE_ENV === "production";
@@ -1117,6 +1117,14 @@ router.post(
       ) {
         return res.status(403).json({
           message: "Branch managers can only create doctor or nurse accounts.",
+        });
+      }
+      if (
+        requestedRole === "billing_staff" &&
+        req.user.role !== "admin"
+      ) {
+        return res.status(403).json({
+          message: "Only clinic admins can create billing staff accounts.",
         });
       }
 

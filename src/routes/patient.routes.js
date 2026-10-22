@@ -448,7 +448,7 @@ const getPatientOr404 = async (id, user) => {
 router.get(
   "/picker",
   protect,
-  authorizeRoles("admin", "branch_manager", "doctor", "nurse"),
+  authorizeRoles("admin", "branch_manager", "doctor", "nurse", "billing_staff"),
   async (req, res) => {
     try {
       const clinicId = req.user.clinicId;
@@ -870,6 +870,16 @@ router.delete(
       }
 
       const deleteIds = patientsToDelete.map((p) => p.id);
+      const paymentHistory = await prisma.billingPayment.findFirst({
+        where: { invoice: { patientId: { in: deleteIds } } },
+        select: { id: true },
+      });
+      if (paymentHistory) {
+        return res.status(409).json({
+          message:
+            "Patients with recorded payment history cannot be permanently deleted. Keep the chart in Trash to preserve financial records.",
+        });
+      }
 
       await withAuditedTransaction(
         req,
@@ -1311,6 +1321,17 @@ router.delete(
         return res.status(400).json({
           message:
             "Only patients already moved to Trash can be permanently deleted",
+        });
+      }
+
+      const paymentHistory = await prisma.billingPayment.findFirst({
+        where: { invoice: { patientId: patient.id } },
+        select: { id: true },
+      });
+      if (paymentHistory) {
+        return res.status(409).json({
+          message:
+            "Patients with recorded payment history cannot be permanently deleted. Keep the chart in Trash to preserve financial records.",
         });
       }
 

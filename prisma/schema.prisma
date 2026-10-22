@@ -30,6 +30,10 @@ model User {
   clinic                     Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   appointments               Appointment[]
   auditLogs                  AuditLog[]
+  recordedBillingPayments    BillingPayment[]     @relation("BillingPaymentRecorder")
+  reversedBillingPayments    BillingPayment[]     @relation("BillingPaymentReverser")
+  submittedCashClosings      CashReconciliation[] @relation("CashClosingSubmitter")
+  reviewedCashClosings       CashReconciliation[] @relation("CashClosingReviewer")
 
   @@index([clinicId, role])
 }
@@ -125,6 +129,7 @@ model Clinic {
   branches                       Branch[]
   patients                       Patient[]
   pendingIntakes                 PendingIntake[]
+  cashReconciliations            CashReconciliation[]
   plan                           PlanType              @default(PRO)
   logoUrl                        String?
   brandColor                     String?
@@ -167,6 +172,8 @@ model Branch {
   waitingEntries    WaitingRoom[]
   invoices          Invoice[]
   auditLogs         AuditLog[]
+  billingPayments   BillingPayment[]
+  cashReconciliations CashReconciliation[]
 
   @@unique([clinicId, slug])
   @@index([clinicId, isActive, createdAt])
@@ -310,9 +317,63 @@ model Invoice {
   branchId        String?
   patient         Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
   branch          Branch?   @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  billingPayments BillingPayment[]
 
   @@index([patientId])
   @@index([status])
+}
+
+model BillingPayment {
+  id                String   @id @default(cuid())
+  invoiceId         String
+  branchId          String
+  amount            Float
+  paymentMethod     String
+  reference         String   @default("")
+  notes             String   @default("")
+  receiptNumber     String   @unique
+  kind              String   @default("recorded")
+  reversalOfId      String?  @unique
+  reversalReason    String   @default("")
+  recordedAt        DateTime @default(now())
+  recordedById      String?
+  reversedById      String?
+  invoice           Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  branch            Branch   @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  recordedBy        User?    @relation("BillingPaymentRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
+  reversedBy        User?    @relation("BillingPaymentReverser", fields: [reversedById], references: [id], onDelete: SetNull)
+  reversalOf        BillingPayment? @relation("BillingPaymentReversals", fields: [reversalOfId], references: [id], onDelete: Restrict)
+  reversal          BillingPayment? @relation("BillingPaymentReversals")
+
+  @@index([invoiceId, recordedAt])
+  @@index([branchId, recordedAt])
+  @@index([recordedById, recordedAt])
+}
+
+model CashReconciliation {
+  id                String   @id @default(cuid())
+  clinicId          String
+  branchId          String
+  businessDate      String
+  timezone          String
+  expectedCash      Float
+  countedCash       Float
+  variance          Float
+  status            String   @default("pending")
+  notes             String   @default("")
+  reviewerNotes     String   @default("")
+  submittedAt       DateTime @default(now())
+  submittedById     String?
+  reviewedAt        DateTime?
+  reviewedById      String?
+  clinic            Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  branch            Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  submittedBy       User?    @relation("CashClosingSubmitter", fields: [submittedById], references: [id], onDelete: SetNull)
+  reviewedBy        User?    @relation("CashClosingReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@unique([branchId, businessDate])
+  @@index([clinicId, businessDate])
+  @@index([branchId, status, businessDate])
 }
 
 model AuditLog {
