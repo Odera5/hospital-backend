@@ -9,7 +9,7 @@
     "start": "node src/server.js",
     "start:local": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test:unit": "node --test tests/branch-access.spec.mjs tests/billing-access.spec.mjs tests/patient-crypto.spec.mjs",
+    "test:unit": "node --test tests/branch-access.spec.mjs tests/billing-access.spec.mjs tests/patient-crypto.spec.mjs tests/patient-clinical-history.spec.mjs",
     "test:smoke": "node --test tests/smoke-test.spec.mjs",
     "test:paystack": "node tests/run-paystack-tests.mjs",
     "test:branch-access": "node --test tests/branch-access.spec.mjs",
