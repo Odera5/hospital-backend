@@ -6,14 +6,12 @@ const isNegativeHistoryStatement = (value) =>
 
 export const syncClinicalHistoryFromRecord = async (
   transaction,
-  { patientId, allergies, comorbidities, recordedById },
+  { patientId, allergies, comorbidities },
 ) => {
   const candidates = [
     { category: "allergy", value: normalizeText(allergies) },
     { category: "comorbidity", value: normalizeText(comorbidities) },
-  ].filter(
-    ({ value }) => value && !isNegativeHistoryStatement(value),
-  );
+  ].filter(({ value }) => value && !isNegativeHistoryStatement(value));
   const createdEntries = [];
 
   for (const entry of candidates) {
@@ -21,7 +19,6 @@ export const syncClinicalHistoryFromRecord = async (
       where: {
         patientId,
         category: entry.category,
-        status: "active",
         value: { equals: entry.value, mode: "insensitive" },
       },
       select: { id: true },
@@ -33,7 +30,6 @@ export const syncClinicalHistoryFromRecord = async (
         data: {
           ...entry,
           patientId,
-          recordedById,
         },
         select: { id: true, category: true },
       }),

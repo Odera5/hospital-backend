@@ -13,7 +13,6 @@ const createTransaction = (existingEntries = []) => {
           (entry) =>
             entry.patientId === where.patientId &&
             entry.category === where.category &&
-            entry.status === where.status &&
             entry.value.toLowerCase() === where.value.equals.toLowerCase(),
         ) || null,
       create: async ({ data }) => {
@@ -32,7 +31,6 @@ test("recording new allergies and comorbidities appends without replacing existi
       patientId: "patient-1",
       category: "allergy",
       value: "Aspirin",
-      status: "active",
     },
   ]);
 
@@ -40,7 +38,6 @@ test("recording new allergies and comorbidities appends without replacing existi
     patientId: "patient-1",
     allergies: "Sulphur-containing medication",
     comorbidities: "Hypertension",
-    recordedById: "clinician-1",
   });
 
   assert.deepEqual(
@@ -54,14 +51,13 @@ test("recording new allergies and comorbidities appends without replacing existi
   assert.equal(created.length, 2);
 });
 
-test("recording a duplicate active entry does not create another row", async () => {
+test("recording a duplicate entry does not create another row", async () => {
   const transaction = createTransaction([
     {
       id: "existing",
       patientId: "patient-1",
       category: "allergy",
       value: "Aspirin",
-      status: "active",
     },
   ]);
 
@@ -75,7 +71,7 @@ test("recording a duplicate active entry does not create another row", async () 
   assert.equal(transaction.entries.length, 1);
 });
 
-test("blank and explicit no-known entries are not recorded as active conditions", async () => {
+test("blank and explicit no-known entries are not recorded", async () => {
   const transaction = createTransaction();
 
   const created = await syncClinicalHistoryFromRecord(transaction, {

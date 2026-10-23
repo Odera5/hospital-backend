@@ -8,38 +8,36 @@ datasource db {
 }
 
 model User {
-  id                         String                   @id @default(cuid())
+  id                         String               @id @default(cuid())
   name                       String
-  email                      String                   @unique
+  email                      String               @unique
   password                   String
-  role                       String                   @default("nurse")
-  isClinicOwner              Boolean                  @default(false)
-  canAccessBilling           Boolean                  @default(false)
+  role                       String               @default("nurse")
+  isClinicOwner              Boolean              @default(false)
+  canAccessBilling           Boolean              @default(false)
   customRoleTitle            String?
-  dateOfBirth                String?                  @default("")
-  avatarUrl                  String?                  @default("")
+  dateOfBirth                String?              @default("")
+  avatarUrl                  String?              @default("")
   clinicId                   String
-  assignedBranchIds          String[]                 @default([])
-  isActive                   Boolean                  @default(true)
-  emailVerified              Boolean                  @default(false)
+  assignedBranchIds          String[]             @default([])
+  isActive                   Boolean              @default(true)
+  emailVerified              Boolean              @default(false)
   emailVerificationToken     String?
   emailVerificationExpiresAt DateTime?
   resetPasswordToken         String?
   resetPasswordExpiresAt     DateTime?
   refreshToken               String?
-  createdAt                  DateTime                 @default(now())
-  updatedAt                  DateTime                 @updatedAt
-  clinic                     Clinic                   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  createdAt                  DateTime             @default(now())
+  updatedAt                  DateTime             @updatedAt
+  clinic                     Clinic               @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   appointments               Appointment[]
   auditLogs                  AuditLog[]
-  recordedBillingPayments    BillingPayment[]         @relation("BillingPaymentRecorder")
-  reversedBillingPayments    BillingPayment[]         @relation("BillingPaymentReverser")
-  submittedCashClosings      CashReconciliation[]     @relation("CashClosingSubmitter")
-  reviewedCashClosings       CashReconciliation[]     @relation("CashClosingReviewer")
-  respondedCashClosings      CashReconciliation[]     @relation("CashClosingResponder")
-  resolvedCashClosings       CashReconciliation[]     @relation("CashClosingResolver")
-  recordedClinicalHistory    PatientClinicalHistory[] @relation("ClinicalHistoryRecorder")
-  reviewedClinicalHistory    PatientClinicalHistory[] @relation("ClinicalHistoryReviewer")
+  recordedBillingPayments    BillingPayment[]     @relation("BillingPaymentRecorder")
+  reversedBillingPayments    BillingPayment[]     @relation("BillingPaymentReverser")
+  submittedCashClosings      CashReconciliation[] @relation("CashClosingSubmitter")
+  reviewedCashClosings       CashReconciliation[] @relation("CashClosingReviewer")
+  respondedCashClosings      CashReconciliation[] @relation("CashClosingResponder")
+  resolvedCashClosings       CashReconciliation[] @relation("CashClosingResolver")
 
   @@index([clinicId, role])
 }
@@ -224,24 +222,15 @@ model Record {
 }
 
 model PatientClinicalHistory {
-  id             String    @id @default(cuid())
-  patientId      String
-  category       String
-  value          String
-  reaction       String    @default("")
-  status         String    @default("active")
-  recordedById   String?
-  lastReviewedAt DateTime?
-  reviewedById   String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  patient        Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  recordedBy     User?     @relation("ClinicalHistoryRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
-  reviewedBy     User?     @relation("ClinicalHistoryReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  id        String   @id @default(cuid())
+  patientId String
+  category  String
+  value     String
+  createdAt DateTime @default(now())
+  patient   Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
 
-  @@index([patientId, status, category, createdAt])
-  @@index([recordedById])
-  @@index([reviewedById])
+  @@unique([patientId, category, value])
+  @@index([patientId, category, createdAt])
 }
 
 model Appointment {

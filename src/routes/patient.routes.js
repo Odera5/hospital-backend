@@ -943,230 +943,20 @@ router.get(
         resourceId: patient.id,
         patientId: patient.id,
       });
-      const [
-        latestAllergyEntry,
-        latestComorbidityEntry,
-        clinicalHistoryEntries,
-      ] = await Promise.all([
-        prisma.record.findFirst({
-          where: {
-            patientId: patient.id,
-            isDeleted: false,
-            allergies: { not: "" },
-          },
-          orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
-          select: { allergies: true, updatedAt: true },
-        }),
-        prisma.record.findFirst({
-          where: {
-            patientId: patient.id,
-            isDeleted: false,
-            comorbidities: { not: "" },
-          },
-          orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
-          select: { comorbidities: true, updatedAt: true },
-        }),
-        prisma.patientClinicalHistory.findMany({
+      const clinicalHistoryEntries =
+        await prisma.patientClinicalHistory.findMany({
           where: { patientId: patient.id },
-          include: {
-            recordedBy: { select: { id: true, name: true } },
-            reviewedBy: { select: { id: true, name: true } },
-          },
-          orderBy: [{ status: "asc" }, { category: "asc" }, { createdAt: "asc" }],
-        }),
-      ]);
+          select: { id: true, category: true, value: true },
+          orderBy: [{ category: "asc" }, { createdAt: "asc" }],
+        });
       res.json({
         ...toDecryptedPatient(patient),
-        clinicalHistorySummary: {
-          allergies: latestAllergyEntry
-            ? {
-                value: latestAllergyEntry.allergies,
-                recordedAt: latestAllergyEntry.updatedAt,
-              }
-            : null,
-          comorbidities: latestComorbidityEntry
-            ? {
-                value: latestComorbidityEntry.comorbidities,
-                recordedAt: latestComorbidityEntry.updatedAt,
-              }
-            : null,
-        },
         clinicalHistoryEntries,
       });
     } catch (error) {
       if (respondAuditUnavailable(res, error)) return;
       console.error("Get patient error:", error);
       res.status(500).json({ message: "Server error" });
-    }
-  },
-);
-
-router.post(
-  "/:id/clinical-history",
-  protect,
-  authorizeRoles("admin", "branch_manager", "doctor"),
-  async (req, res) => {
-    try {
-      const patient = await getPatientOr404(req.params.id, req.user);
-      if (!patient) {
-        return res.status(404).json({ message: "Patient not found" });
-      }
-
-      const category = normalizeText(req.body?.category).toLowerCase();
-      const value = normalizeText(req.body?.value);
-      const reaction = normalizeText(req.body?.reaction);
-      if (!["allergy", "comorbidity"].includes(category) || !value) {
-        return res.status(400).json({
-          message: "Choose a history type and enter a name or description.",
-        });
-      }
-      if (value.length > 500 || reaction.length > 500) {
-        return res.status(400).json({
-          message: "History entries must be 500 characters or fewer.",
-        });
-      }
-      const duplicate = await prisma.patientClinicalHistory.findFirst({
-        where: {
-          patientId: patient.id,
-          category,
-          status: "active",
-          value: { equals: value, mode: "insensitive" },
-          reaction: { equals: reaction, mode: "insensitive" },
-        },
-      });
-      if (duplicate) {
-        return res.status(409).json({
-          message: "This information is already on the active clinical history list.",
-        });
-      }
-
-      const entry = await withAuditedTransaction(
-        req,
-        (createdEntry) => ({
-          action: "patient.clinical_history.create",
-          resourceType: "patient_clinical_history",
-          resourceId: createdEntry.id,
-          patientId: patient.id,
-          metadata: { category },
-        }),
-        (transaction) =>
-          transaction.patientClinicalHistory.create({
-            data: {
-              patientId: patient.id,
-              category,
-              value,
-              reaction: category === "allergy" ? reaction : "",
-              recordedById: req.user.id,
-            },
-            include: {
-              recordedBy: { select: { id: true, name: true } },
-              reviewedBy: { select: { id: true, name: true } },
-            },
-          }),
-      );
-
-      return res.status(201).json(entry);
-    } catch (error) {
-      if (respondAuditUnavailable(res, error)) return;
-      console.error("Add patient clinical history error:", error);
-      return res.status(500).json({ message: "Failed to add clinical history" });
-    }
-  },
-);
-
-router.patch(
-  "/:id/clinical-history/:entryId",
-  protect,
-  authorizeRoles("admin", "branch_manager", "doctor"),
-  async (req, res) => {
-    try {
-      const patient = await getPatientOr404(req.params.id, req.user);
-      if (!patient) {
-        return res.status(404).json({ message: "Patient not found" });
-      }
-      const status = normalizeText(req.body?.status).toLowerCase();
-      if (!["active", "resolved", "entered_in_error"].includes(status)) {
-        return res.status(400).json({ message: "Invalid clinical history status." });
-      }
-      const existing = await prisma.patientClinicalHistory.findFirst({
-        where: { id: req.params.entryId, patientId: patient.id },
-        select: { id: true, category: true },
-      });
-      if (!existing) {
-        return res.status(404).json({ message: "Clinical history entry not found." });
-      }
-
-      const entry = await withAuditedTransaction(
-        req,
-        {
-          action: "patient.clinical_history.update",
-          resourceType: "patient_clinical_history",
-          resourceId: existing.id,
-          patientId: patient.id,
-          metadata: { category: existing.category, status },
-        },
-        (transaction) =>
-          transaction.patientClinicalHistory.update({
-            where: { id: existing.id },
-            data: { status },
-            include: {
-              recordedBy: { select: { id: true, name: true } },
-              reviewedBy: { select: { id: true, name: true } },
-            },
-          }),
-      );
-      return res.json(entry);
-    } catch (error) {
-      if (respondAuditUnavailable(res, error)) return;
-      console.error("Update patient clinical history error:", error);
-      return res.status(500).json({ message: "Failed to update clinical history" });
-    }
-  },
-);
-
-router.post(
-  "/:id/clinical-history/review",
-  protect,
-  authorizeRoles("admin", "branch_manager", "doctor"),
-  async (req, res) => {
-    try {
-      const patient = await getPatientOr404(req.params.id, req.user);
-      if (!patient) {
-        return res.status(404).json({ message: "Patient not found" });
-      }
-      const reviewedAt = new Date();
-      const result = await withAuditedTransaction(
-        req,
-        (reviewResult) => ({
-          action: "patient.clinical_history.review",
-          resourceType: "patient",
-          resourceId: patient.id,
-          patientId: patient.id,
-          metadata: { reviewedEntryCount: reviewResult.reviewedCount },
-        }),
-        async (transaction) => {
-          const updateResult = await transaction.patientClinicalHistory.updateMany({
-            where: { patientId: patient.id, status: "active" },
-            data: { lastReviewedAt: reviewedAt, reviewedById: req.user.id },
-          });
-          return {
-            reviewedCount: updateResult.count,
-            entries: await transaction.patientClinicalHistory.findMany({
-              where: { patientId: patient.id },
-              include: {
-                recordedBy: { select: { id: true, name: true } },
-                reviewedBy: { select: { id: true, name: true } },
-              },
-              orderBy: [{ status: "asc" }, { category: "asc" }, { createdAt: "asc" }],
-            }),
-          };
-        },
-      );
-      return res.json(result.entries);
-    } catch (error) {
-      if (respondAuditUnavailable(res, error)) return;
-      console.error("Review patient clinical history error:", error);
-      return res.status(500).json({ message: "Failed to review clinical history" });
     }
   },
 );
@@ -1714,7 +1504,6 @@ router.post(
               patientId: patient.id,
               allergies,
               comorbidities,
-              recordedById: req.user.id,
             },
           );
           return { record, addedHistoryEntries };
@@ -1886,7 +1675,6 @@ router.put(
                 normalizeText(record.comorbidities)
                   ? ""
                   : comorbidities,
-              recordedById: req.user.id,
             },
           );
           return { record: updatedRecord, addedHistoryEntries };
