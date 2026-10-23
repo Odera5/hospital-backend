@@ -83,3 +83,23 @@ test("blank and explicit no-known entries are not recorded", async () => {
   assert.deepEqual(created, []);
   assert.deepEqual(transaction.entries, []);
 });
+
+test("separates delimited history and removes the allergy phrase", async () => {
+  const transaction = createTransaction();
+
+  await syncClinicalHistoryFromRecord(transaction, {
+    patientId: "patient-1",
+    allergies: "Allergic to Amoxicillin; Allergic to Penicillin",
+    comorbidities: "Ischemic Heart Disease\nHeart Murmur",
+  });
+
+  assert.deepEqual(
+    transaction.entries.map(({ category, value }) => ({ category, value })),
+    [
+      { category: "allergy", value: "Amoxicillin" },
+      { category: "allergy", value: "Penicillin" },
+      { category: "comorbidity", value: "Ischemic Heart Disease" },
+      { category: "comorbidity", value: "Heart Murmur" },
+    ],
+  );
+});

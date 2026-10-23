@@ -4,14 +4,31 @@ const normalizeText = (value) =>
 const isNegativeHistoryStatement = (value) =>
   /^(?:no known|none\b|nka\b|nil\b)/i.test(value);
 
+const splitHistoryValues = (value, category) =>
+  normalizeText(value)
+    .split(/[;,\n]+/)
+    .map((entry) => entry.trim())
+    .map((entry) =>
+      category === "allergy"
+        ? entry.replace(/^allergic\s+to\s+/i, "")
+        : entry,
+    )
+    .filter((entry) => entry && !isNegativeHistoryStatement(entry));
+
 export const syncClinicalHistoryFromRecord = async (
   transaction,
   { patientId, allergies, comorbidities },
 ) => {
   const candidates = [
-    { category: "allergy", value: normalizeText(allergies) },
-    { category: "comorbidity", value: normalizeText(comorbidities) },
-  ].filter(({ value }) => value && !isNegativeHistoryStatement(value));
+    ...splitHistoryValues(allergies, "allergy").map((value) => ({
+      category: "allergy",
+      value,
+    })),
+    ...splitHistoryValues(comorbidities, "comorbidity").map((value) => ({
+      category: "comorbidity",
+      value,
+    })),
+  ];
   const createdEntries = [];
 
   for (const entry of candidates) {
