@@ -35,6 +35,7 @@ router.get(
     try {
       const clinicId = req.user.clinicId;
       const branchId = req.user.branchId;
+      const canViewRevenue = ["admin", "branch_manager"].includes(req.user.role);
       const { start: startOfDay, end: endOfDay } = getDayBounds();
       const { start: startOfMonth, end: endOfMonth } = getMonthBounds();
 
@@ -113,12 +114,14 @@ router.get(
           _count: { _all: true },
         }),
         prisma.waitingRoom.count({ where: waitingClinicWhere }),
-        prisma.invoice.aggregate({
-          where: invoiceClinicWhere,
-          _sum: {
-            total: true,
-          },
-        }),
+        canViewRevenue
+          ? prisma.invoice.aggregate({
+              where: invoiceClinicWhere,
+              _sum: {
+                total: true,
+              },
+            })
+          : Promise.resolve(null),
         prisma.pendingIntake.count({
           where: { clinicId, branchId, status: "pending" },
         }),
@@ -150,9 +153,13 @@ router.get(
           total: totalWaiting,
           active: activeWaiting,
         },
-        billing: {
-          monthlyRevenue: revenueAggregate._sum.total || 0,
-        },
+        ...(canViewRevenue
+          ? {
+              billing: {
+                monthlyRevenue: revenueAggregate?._sum.total || 0,
+              },
+            }
+          : {}),
         intakes: {
           pending: pendingIntakesCount,
         },
