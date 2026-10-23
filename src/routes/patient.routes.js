@@ -1,4 +1,5 @@
 import express from "express";
+import { once } from "events";
 import fs from "fs";
 import path from "path";
 import { Prisma } from "@prisma/client";
@@ -23,7 +24,6 @@ import { getAccessiblePatientBranchIds } from "../utils/branchAccess.js";
 import { hasEnterpriseAccess } from "../utils/subscriptionAccess.js";
 import {
   buildPatientSearchIndexData,
-  clinicHasPendingPatientSearchBackfill,
 } from "../services/patientSearchIndex.js";
 
 const router = express.Router();
@@ -38,25 +38,6 @@ const respondAuditUnavailable = (res, error) => {
 
 const normalizeText = (value) =>
   typeof value === "string" ? value.trim() : "";
-
-const isCardNumberMatch = (cardNumberStr, searchStr) => {
-  if (!cardNumberStr || !searchStr) return false;
-  const cleanCardNumber = String(cardNumberStr).trim().toLowerCase();
-  const cleanSearch = String(searchStr).trim().toLowerCase();
-
-  if (cleanCardNumber.includes(cleanSearch)) return true;
-
-  const cardDigitsMatch = cleanCardNumber.match(/(?:p-?|P-?)?(\d+)/i);
-  const searchDigitsMatch = cleanSearch.match(/^(?:p-?|P-?)?(\d+)$/i);
-
-  if (cardDigitsMatch && searchDigitsMatch) {
-    return (
-      parseInt(cardDigitsMatch[1], 10) === parseInt(searchDigitsMatch[1], 10)
-    );
-  }
-
-  return false;
-};
 
 const normalizeTeeth = (value) => {
   if (!value) return [];
@@ -310,10 +291,88 @@ const buildPatientSearchWhere = (search) => {
 };
 
 const buildPatientSortOrder = (sortBy, sortDirection) => {
-  if (sortBy === "name") return { searchName: sortDirection };
-  if (sortBy === "cardNumber") return { searchCardNumber: sortDirection };
-  if (sortBy === "age") return { ageNumber: sortDirection };
-  return { createdAt: sortDirection };
+  const field =
+    sortBy === "name"
+      ? "searchName"
+      : sortBy === "cardNumber"
+        ? "searchCardNumber"
+        : sortBy === "age"
+          ? "ageNumber"
+          : sortBy === "updatedAt"
+            ? "updatedAt"
+          : "createdAt";
+  const sortableNullableField = ["searchName", "searchCardNumber", "ageNumber"].includes(field);
+  return [
+    {
+      [field]: sortableNullableField
+        ? { sort: sortDirection, nulls: "last" }
+        : sortDirection,
+    },
+    { id: sortDirection },
+  ];
+};
+
+const getPatientSortField = (sortBy) =>
+  sortBy === "name"
+    ? "searchName"
+    : sortBy === "cardNumber"
+      ? "searchCardNumber"
+      : sortBy === "age"
+        ? "ageNumber"
+        : sortBy === "updatedAt"
+          ? "updatedAt"
+          : "createdAt";
+
+const decodePatientCursor = (value, sortBy, sortDirection) => {
+  if (!value) return null;
+  try {
+    const cursor = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+    const field = getPatientSortField(sortBy);
+    if (
+      typeof cursor?.id !== "string" ||
+      !cursor.id ||
+      !Object.prototype.hasOwnProperty.call(cursor, "value")
+    ) {
+      throw new Error("Invalid patient cursor.");
+    }
+    let cursorValue = cursor.value;
+    if (field === "createdAt" || field === "updatedAt") {
+      cursorValue = new Date(cursorValue);
+      if (Number.isNaN(cursorValue.getTime())) throw new Error("Invalid patient cursor.");
+    } else if (cursorValue === null && ["searchName", "searchCardNumber", "ageNumber"].includes(field)) {
+      const operator = sortDirection === "asc" ? "gt" : "lt";
+      return { [field]: null, id: { [operator]: cursor.id } };
+    } else if (field === "ageNumber") {
+      cursorValue = Number(cursorValue);
+      if (!Number.isFinite(cursorValue)) throw new Error("Invalid patient cursor.");
+    } else if (typeof cursorValue !== "string") {
+      throw new Error("Invalid patient cursor.");
+    }
+    const operator = sortDirection === "asc" ? "gt" : "lt";
+    return {
+      OR: [
+        { [field]: { [operator]: cursorValue } },
+        { [field]: cursorValue, id: { [operator]: cursor.id } },
+        ...( ["searchName", "searchCardNumber", "ageNumber"].includes(field)
+          ? [{ [field]: null }]
+          : []),
+      ],
+    };
+  } catch {
+    throw new Error("Invalid patient cursor.");
+  }
+};
+
+const encodePatientCursor = (patient, sortBy) => {
+  const field = getPatientSortField(sortBy);
+  return Buffer.from(
+    JSON.stringify({
+      id: patient.id,
+      value: patient[field] instanceof Date
+        ? patient[field].toISOString()
+        : patient[field],
+    }),
+  ).toString("base64url");
 };
 
 const normalizeSortDirection = (value, fallback = "desc") =>
@@ -340,34 +399,6 @@ const VALID_TRASH_SORT_FIELDS = new Set([
   "age",
   "cardNumber",
 ]);
-
-const sortPatientsCollection = (
-  patients,
-  sortBy = "createdAt",
-  sortDirection = "desc",
-) => {
-  const directionMultiplier = sortDirection === "asc" ? 1 : -1;
-
-  return [...patients].sort((left, right) => {
-    let leftValue = left?.[sortBy];
-    let rightValue = right?.[sortBy];
-
-    if (sortBy === "age") {
-      leftValue = Number(leftValue) || 0;
-      rightValue = Number(rightValue) || 0;
-    } else if (sortBy === "createdAt") {
-      leftValue = new Date(leftValue).getTime() || 0;
-      rightValue = new Date(rightValue).getTime() || 0;
-    } else {
-      leftValue = String(leftValue || "").toLowerCase();
-      rightValue = String(rightValue || "").toLowerCase();
-    }
-
-    if (leftValue < rightValue) return -1 * directionMultiplier;
-    if (leftValue > rightValue) return 1 * directionMultiplier;
-    return 0;
-  });
-};
 
 const isPatientCardSequenceConflict = (error) =>
   error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -444,6 +475,90 @@ const getPatientOr404 = async (id, user) => {
   if (!patient || patient.isDeleted) return null;
   return patient;
 };
+
+router.get(
+  "/export.csv",
+  protect,
+  authorizeRoles("admin", "branch_manager", "doctor", "nurse"),
+  requireProOrEnterprise,
+  async (req, res) => {
+    try {
+      const where = {
+        clinicId: req.user.clinicId,
+        branchId: req.user.branchId,
+        isDeleted: false,
+      };
+      await requireAuditEvent(req, {
+        action: "patient.export",
+        resourceType: "patient",
+        metadata: { format: "csv", branchId: req.user.branchId },
+      });
+
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="patients_export_${Date.now()}.csv"`,
+      );
+      res.write("Name,Age,Gender,Phone,Email,Address,CardNumber,CreatedAt\r\n");
+
+      const csvCell = (value) => {
+        let text = String(value ?? "");
+        if (/^[\s]*[=+\-@]/.test(text)) text = `'${text}`;
+        return `"${text.replace(/"/g, '""')}"`;
+      };
+      let cursor;
+      while (true) {
+        const patients = await prisma.patient.findMany({
+          where: {
+            ...where,
+            ...(cursor ? { id: { gt: cursor } } : {}),
+          },
+          orderBy: { id: "asc" },
+          take: 500,
+          select: {
+            id: true,
+            name: true,
+            age: true,
+            gender: true,
+            phone: true,
+            email: true,
+            address: true,
+            cardNumber: true,
+            createdAt: true,
+          },
+        });
+        if (patients.length === 0) break;
+
+        for (const rawPatient of patients) {
+          const patient = toDecryptedPatient(rawPatient);
+          const row = [
+            patient.name,
+            patient.age,
+            patient.gender,
+            patient.phone ? `\t${patient.phone}` : "",
+            patient.email,
+            patient.address,
+            patient.cardNumber,
+            patient.createdAt?.toISOString?.() || "",
+          ]
+            .map(csvCell)
+            .join(",");
+          if (!res.write(`${row}\r\n`)) await once(res, "drain");
+        }
+        cursor = patients[patients.length - 1].id;
+      }
+      res.end();
+    } catch (error) {
+      if (respondAuditUnavailable(res, error)) return;
+      console.error("Export patients error:", error);
+      if (res.headersSent) {
+        res.destroy(error);
+        return;
+      }
+      res.status(500).json({ message: "Failed to export patients" });
+    }
+  },
+);
 
 router.get(
   "/picker",
@@ -534,8 +649,6 @@ router.get(
         req.query.sortDirection,
         sortBy === "createdAt" ? "desc" : "asc",
       );
-      const shouldPaginate =
-        pageParam !== undefined || limitParam !== undefined;
 
       const isGlobal =
         req.query.global === "true" &&
@@ -551,110 +664,59 @@ router.get(
             : { branchId }),
       };
 
-      if (!shouldPaginate) {
-        const patients = await prisma.patient.findMany({
-          where: baseWhere,
-          orderBy: { createdAt: "desc" },
-        });
-
-        await requireAuditEvent(req, {
-          action: "patient.directory_access",
-          resourceType: "patient",
-          metadata: { resultCount: patients.length, globalSearch: isGlobal },
-        });
-        return res.json(patients.map(toDecryptedPatient));
-      }
-
       const page = parsePositiveInteger(pageParam, 1);
       const limit = Math.min(parsePositiveInteger(limitParam, 25), 100);
-      const skip = (page - 1) * limit;
-      const requiresIndexedSearchOrSort =
-        Boolean(search) || ["name", "age", "cardNumber"].includes(sortBy);
-      const canUseIndexedSearchOrSort =
-        !requiresIndexedSearchOrSort ||
-        !(await clinicHasPendingPatientSearchBackfill(clinicId));
-
-      if (canUseIndexedSearchOrSort) {
-        const [patients, total] = await Promise.all([
-          prisma.patient.findMany({
-            where: {
-              ...baseWhere,
-              ...buildPatientSearchWhere(search),
-            },
-            orderBy: buildPatientSortOrder(sortBy, sortDirection),
-            skip,
-            take: limit,
-          }),
-          prisma.patient.count({
-            where: {
-              ...baseWhere,
-              ...buildPatientSearchWhere(search),
-            },
-          }),
-        ]);
-
-        await requireAuditEvent(req, {
-          action: "patient.directory_access",
-          resourceType: "patient",
-          metadata: { resultCount: patients.length, globalSearch: isGlobal },
-        });
-        return res.json({
-          data: patients.map(toDecryptedPatient),
-          page,
-          limit,
-          total,
-          totalPages: Math.max(1, Math.ceil(total / limit)),
-        });
-      }
-
-      const patients = await prisma.patient.findMany({
-        where: baseWhere,
-        orderBy: { createdAt: "desc" },
-      });
-
-      const filteredPatients = patients
-        .map(toDecryptedPatient)
-        .filter((patient) => {
-          if (!search) return true;
-
-          const hasNameMatch =
-            patient?.name &&
-            String(patient.name).toLowerCase().includes(search);
-          const hasAgeMatch =
-            patient?.age && String(patient.age).toLowerCase().includes(search);
-          const hasCardMatch = isCardNumberMatch(patient?.cardNumber, search);
-
-          return hasNameMatch || hasAgeMatch || hasCardMatch;
-        });
-
-      const sortedPatients = sortPatientsCollection(
-        filteredPatients,
+      const cursorWhere = decodePatientCursor(
+        normalizeText(req.query.cursor),
         sortBy,
         sortDirection,
       );
-      const total = sortedPatients.length;
-      const paginatedPatients = sortedPatients.slice(skip, skip + limit);
+      const filters = {
+        ...baseWhere,
+        ...buildPatientSearchWhere(search),
+      };
+      const where = cursorWhere
+        ? { ...filters, AND: [cursorWhere] }
+        : filters;
+      const [patients, total] = await Promise.all([
+        prisma.patient.findMany({
+          where,
+          orderBy: buildPatientSortOrder(sortBy, sortDirection),
+          take: limit + 1,
+        }),
+        prisma.patient.count({ where: filters }),
+      ]);
+      const hasMore = patients.length > limit;
+      if (hasMore) patients.pop();
 
       await requireAuditEvent(req, {
         action: "patient.directory_access",
         resourceType: "patient",
-        metadata: { resultCount: paginatedPatients.length, globalSearch: isGlobal },
+        metadata: { resultCount: patients.length, globalSearch: isGlobal },
       });
       return res.json({
-        data: paginatedPatients,
+        data: patients.map(toDecryptedPatient),
         page,
         limit,
         total,
         totalPages: Math.max(1, Math.ceil(total / limit)),
+        hasMore,
+        nextCursor: hasMore && patients.length
+          ? encodePatientCursor(patients[patients.length - 1], sortBy)
+          : null,
       });
     } catch (error) {
+      if (error.message === "Invalid patient cursor.") {
+        return res.status(400).json({ message: error.message });
+      }
       if (respondAuditUnavailable(res, error)) return;
       console.error("Get patients error:", error);
-      res.status(500).json({
+        res.status(500).json({
         message: "Failed to fetch patients",
-        error: error.message,
-        stack: error.stack,
-      });
+          ...(process.env.NODE_ENV !== "production"
+            ? { error: error.message, stack: error.stack }
+            : {}),
+        });
     }
   },
 );
@@ -674,7 +736,6 @@ router.get("/trash/all", protect, authorizeRoles("admin"), async (req, res) => {
       req.query.sortDirection,
       "desc",
     );
-    const shouldPaginate = pageParam !== undefined || limitParam !== undefined;
     const isGlobal =
       req.query.global === "true" &&
       hasEnterpriseAccess(req.user.clinic);
@@ -684,100 +745,51 @@ router.get("/trash/all", protect, authorizeRoles("admin"), async (req, res) => {
       ...(isGlobal ? {} : { branchId }),
     };
 
-    if (!shouldPaginate) {
-      const trash = await prisma.patient.findMany({
-        where: baseWhere,
-        orderBy: { updatedAt: "desc" },
-      });
-
-      await requireAuditEvent(req, {
-        action: "patient.trash_access",
-        resourceType: "patient",
-        metadata: { resultCount: trash.length, globalSearch: isGlobal },
-      });
-      return res.json(trash.map(toDecryptedPatient));
-    }
-
     const page = parsePositiveInteger(pageParam, 1);
     const limit = Math.min(parsePositiveInteger(limitParam, 25), 100);
-    const skip = (page - 1) * limit;
-    const requiresIndexedSearchOrSort =
-      Boolean(search) || ["name", "age", "cardNumber"].includes(sortBy);
-    const canUseIndexedSearchOrSort =
-      !requiresIndexedSearchOrSort ||
-      !(await clinicHasPendingPatientSearchBackfill(clinicId));
-
-    if (canUseIndexedSearchOrSort) {
-      const [trash, total] = await Promise.all([
-        prisma.patient.findMany({
-          where: {
-            ...baseWhere,
-            ...buildPatientSearchWhere(search),
-          },
-          orderBy: buildPatientSortOrder(sortBy, sortDirection),
-          skip,
-          take: limit,
-        }),
-        prisma.patient.count({
-          where: {
-            ...baseWhere,
-            ...buildPatientSearchWhere(search),
-          },
-        }),
-      ]);
-
-      await requireAuditEvent(req, {
-        action: "patient.trash_access",
-        resourceType: "patient",
-        metadata: { resultCount: trash.length, globalSearch: isGlobal },
-      });
-      return res.json({
-        data: trash.map(toDecryptedPatient),
-        page,
-        limit,
-        total,
-        totalPages: Math.max(1, Math.ceil(total / limit)),
-      });
-    }
-
-    const trash = await prisma.patient.findMany({
-      where: baseWhere,
-      orderBy: { updatedAt: "desc" },
-    });
-
-    const filteredPatients = trash.map(toDecryptedPatient).filter((patient) => {
-      if (!search) return true;
-
-      const hasNameMatch =
-        patient?.name && String(patient.name).toLowerCase().includes(search);
-      const hasAgeMatch =
-        patient?.age && String(patient.age).toLowerCase().includes(search);
-      const hasCardMatch = isCardNumberMatch(patient?.cardNumber, search);
-
-      return hasNameMatch || hasAgeMatch || hasCardMatch;
-    });
-
-    const sortedPatients = sortPatientsCollection(
-      filteredPatients,
+    const cursorWhere = decodePatientCursor(
+      normalizeText(req.query.cursor),
       sortBy,
       sortDirection,
     );
-    const total = sortedPatients.length;
-    const paginatedPatients = sortedPatients.slice(skip, skip + limit);
+    const filters = {
+      ...baseWhere,
+      ...buildPatientSearchWhere(search),
+    };
+    const where = cursorWhere
+      ? { ...filters, AND: [cursorWhere] }
+      : filters;
+    const [trash, total] = await Promise.all([
+      prisma.patient.findMany({
+        where,
+        orderBy: buildPatientSortOrder(sortBy, sortDirection),
+        take: limit + 1,
+      }),
+      prisma.patient.count({ where: filters }),
+    ]);
+    const hasMore = trash.length > limit;
+    if (hasMore) trash.pop();
 
     await requireAuditEvent(req, {
       action: "patient.trash_access",
       resourceType: "patient",
-      metadata: { resultCount: paginatedPatients.length, globalSearch: isGlobal },
+      metadata: { resultCount: trash.length, globalSearch: isGlobal },
     });
     return res.json({
-      data: paginatedPatients,
+      data: trash.map(toDecryptedPatient),
       page,
       limit,
       total,
       totalPages: Math.max(1, Math.ceil(total / limit)),
+      hasMore,
+      nextCursor: hasMore && trash.length
+        ? encodePatientCursor(trash[trash.length - 1], sortBy)
+        : null,
     });
   } catch (error) {
+    if (error.message === "Invalid patient cursor.") {
+      return res.status(400).json({ message: error.message });
+    }
     if (respondAuditUnavailable(res, error)) return;
     console.error("Get trash error:", error);
     res.status(500).json({ message: "Failed to fetch trash" });

@@ -30,23 +30,6 @@ export const buildPatientSearchIndexDataFromRow = (patient) =>
     age: decryptPatientValue(patient?.age),
   });
 
-export const clinicHasPendingPatientSearchBackfill = async (clinicId) => {
-  if (!clinicId) return false;
-
-  const pending = await prisma.patient.count({
-    where: {
-      clinicId,
-      OR: [
-        { searchName: null },
-        { searchCardNumber: null },
-        { ageNumber: null },
-      ],
-    },
-  });
-
-  return pending > 0;
-};
-
 export const backfillPatientSearchIndexes = async ({
   clinicId,
   batchSize = BACKFILL_BATCH_SIZE,
@@ -58,6 +41,7 @@ export const backfillPatientSearchIndexes = async ({
     const patients = await prisma.patient.findMany({
       where: {
         ...(clinicId ? { clinicId } : {}),
+        ...(cursor ? { id: { gt: cursor } } : {}),
         OR: [
           { searchName: null },
           { searchCardNumber: null },
@@ -66,7 +50,6 @@ export const backfillPatientSearchIndexes = async ({
       },
       orderBy: { id: "asc" },
       take: batchSize,
-      ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
       select: {
         id: true,
         name: true,
@@ -80,14 +63,19 @@ export const backfillPatientSearchIndexes = async ({
     }
 
     const updates = patients.map((patient) =>
-      prisma.patient.update({
-        where: { id: patient.id },
+      prisma.patient.updateMany({
+        where: {
+          id: patient.id,
+          searchName: patient.searchName,
+          searchCardNumber: patient.searchCardNumber,
+          ageNumber: patient.ageNumber,
+        },
         data: buildPatientSearchIndexDataFromRow(patient),
       }),
     );
 
-    await prisma.$transaction(updates);
-    processed += patients.length;
+    const results = await prisma.$transaction(updates);
+    processed += results.reduce((total, result) => total + result.count, 0);
     cursor = patients[patients.length - 1]?.id;
   }
 };
