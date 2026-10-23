@@ -36,6 +36,8 @@ model User {
   reversedBillingPayments    BillingPayment[]     @relation("BillingPaymentReverser")
   submittedCashClosings      CashReconciliation[] @relation("CashClosingSubmitter")
   reviewedCashClosings       CashReconciliation[] @relation("CashClosingReviewer")
+  respondedCashClosings      CashReconciliation[] @relation("CashClosingResponder")
+  resolvedCashClosings       CashReconciliation[] @relation("CashClosingResolver")
 
   @@index([clinicId, role])
 }
@@ -368,10 +370,18 @@ model CashReconciliation {
   submittedById     String?
   reviewedAt        DateTime?
   reviewedById      String?
+  followUpNotes     String   @default("")
+  respondedAt       DateTime?
+  respondedById     String?
+  resolutionNotes   String   @default("")
+  resolvedAt        DateTime?
+  resolvedById      String?
   clinic            Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   branch            Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
   submittedBy       User?    @relation("CashClosingSubmitter", fields: [submittedById], references: [id], onDelete: SetNull)
   reviewedBy        User?    @relation("CashClosingReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  respondedBy       User?    @relation("CashClosingResponder", fields: [respondedById], references: [id], onDelete: SetNull)
+  resolvedBy        User?    @relation("CashClosingResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
 
   @@unique([branchId, businessDate])
   @@index([clinicId, businessDate])

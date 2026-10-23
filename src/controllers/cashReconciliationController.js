@@ -68,23 +68,87 @@ const closingInclude = {
   branch: { select: { id: true, name: true, city: true } },
   submittedBy: { select: { id: true, name: true } },
   reviewedBy: { select: { id: true, name: true } },
+  respondedBy: { select: { id: true, name: true } },
+  resolvedBy: { select: { id: true, name: true } },
 };
 
 export const getCashReconciliations = async (req, res) => {
   try {
-    const closings = await prisma.cashReconciliation.findMany({
-      where: {
-        clinicId: req.user.clinicId,
-        branchId: req.user.branchId,
+    const status = String(req.query.status || "pending");
+    const fromDate = String(req.query.fromDate || "");
+    const toDate = String(req.query.toDate || "");
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+    const pageSize = Math.min(25, Math.max(1, Number.parseInt(req.query.pageSize, 10) || 25));
+    const statusFilter = new Map([
+      ["pending", { status: "pending" }],
+      ["flagged", { status: "flagged" }],
+      ["history", { status: { in: ["approved", "resolved"] } }],
+    ]).get(status);
+    if (!statusFilter) {
+      return res.status(400).json({ message: "Select pending, flagged, or history." });
+    }
+    if (
+      (fromDate && !datePattern.test(fromDate)) ||
+      (toDate && !datePattern.test(toDate)) ||
+      (fromDate && toDate && fromDate > toDate)
+    ) {
+      return res.status(400).json({ message: "Select a valid cash close date range." });
+    }
+    const where = {
+      clinicId: req.user.clinicId,
+      branchId: req.user.branchId,
+      ...statusFilter,
+      ...(fromDate || toDate
+        ? {
+            businessDate: {
+              ...(fromDate ? { gte: fromDate } : {}),
+              ...(toDate ? { lte: toDate } : {}),
+            },
+          }
+        : {}),
+    };
+    const [closings, total] = await Promise.all([
+      prisma.cashReconciliation.findMany({
+        where,
+        include: closingInclude,
+        orderBy: [{ businessDate: "desc" }, { submittedAt: "desc" }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      prisma.cashReconciliation.count({ where }),
+    ]);
+    res.json({
+      data: closings,
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages: Math.ceil(total / pageSize),
       },
-      include: closingInclude,
-      orderBy: { businessDate: "desc" },
-      take: 90,
     });
-    res.json({ data: closings });
   } catch (error) {
     console.error("Fetch cash reconciliations error:", error);
     res.status(500).json({ message: "Failed to load cash reconciliations." });
+  }
+};
+
+export const getPendingCashReconciliationCount = async (req, res) => {
+  try {
+    const count = await prisma.cashReconciliation.count({
+      where: {
+        clinicId: req.user.clinicId,
+        branchId: req.user.branchId,
+        status: "pending",
+        OR: [
+          { submittedById: null },
+          { submittedById: { not: req.user.id } },
+        ],
+      },
+    });
+    res.json({ count });
+  } catch (error) {
+    console.error("Fetch pending cash reconciliation count error:", error);
+    res.status(500).json({ message: "Failed to load pending cash close count." });
   }
 };
 
@@ -255,5 +319,152 @@ export const reviewCashReconciliation = async (req, res) => {
     }
     console.error("Review cash reconciliation error:", error);
     res.status(500).json({ message: "Failed to review cash close." });
+  }
+};
+
+export const respondToFlaggedCashReconciliation = async (req, res) => {
+  try {
+    const followUpNotes = String(req.body?.followUpNotes || "").trim();
+    if (followUpNotes.length < 5 || followUpNotes.length > 500) {
+      return res.status(400).json({
+        message: "Follow-up notes must be between 5 and 500 characters.",
+      });
+    }
+    const existing = await prisma.cashReconciliation.findFirst({
+      where: {
+        id: req.params.id,
+        clinicId: req.user.clinicId,
+        branchId: req.user.branchId,
+        status: "flagged",
+      },
+    });
+    if (!existing) {
+      return res.status(404).json({ message: "Flagged cash close not found." });
+    }
+    if (existing.submittedById !== req.user.id && req.user.role !== "admin") {
+      return res.status(403).json({
+        message: "Only the submitter or an admin can record the investigation response.",
+      });
+    }
+    if (existing.followUpNotes) {
+      return res.status(409).json({
+        message: "An investigation response has already been recorded.",
+      });
+    }
+
+    const closing = await withAuditedTransaction(
+      req,
+      (responded) => ({
+        action: "cash_reconciliation.respond",
+        resourceType: "cash_reconciliation",
+        resourceId: responded.id,
+        branchId: responded.branchId,
+        metadata: { followUpNotes: responded.followUpNotes },
+      }),
+      async (transaction) => {
+        const update = await transaction.cashReconciliation.updateMany({
+          where: {
+            id: existing.id,
+            status: "flagged",
+            followUpNotes: "",
+          },
+          data: {
+            followUpNotes,
+            respondedAt: new Date(),
+            respondedById: req.user.id,
+          },
+        });
+        if (update.count !== 1) {
+          const error = new Error("An investigation response has already been recorded.");
+          error.statusCode = 409;
+          throw error;
+        }
+        return transaction.cashReconciliation.findUnique({
+          where: { id: existing.id },
+          include: closingInclude,
+        });
+      },
+    );
+    res.json({ reconciliation: closing });
+  } catch (error) {
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({ message: error.message });
+    }
+    console.error("Respond to flagged cash reconciliation error:", error);
+    res.status(500).json({ message: "Failed to record investigation response." });
+  }
+};
+
+export const resolveFlaggedCashReconciliation = async (req, res) => {
+  try {
+    const resolutionNotes = String(req.body?.resolutionNotes || "").trim();
+    if (resolutionNotes.length < 5 || resolutionNotes.length > 500) {
+      return res.status(400).json({
+        message: "Resolution notes must be between 5 and 500 characters.",
+      });
+    }
+    const existing = await prisma.cashReconciliation.findFirst({
+      where: {
+        id: req.params.id,
+        clinicId: req.user.clinicId,
+        branchId: req.user.branchId,
+        status: "flagged",
+      },
+    });
+    if (!existing) {
+      return res.status(404).json({ message: "Flagged cash close not found." });
+    }
+    if (!existing.followUpNotes) {
+      return res.status(409).json({
+        message: "The submitter must record an investigation response before resolution.",
+      });
+    }
+    if (existing.submittedById === req.user.id) {
+      return res.status(403).json({
+        message: "The submitter cannot resolve their own flagged cash close.",
+      });
+    }
+
+    const closing = await withAuditedTransaction(
+      req,
+      (resolved) => ({
+        action: "cash_reconciliation.resolve",
+        resourceType: "cash_reconciliation",
+        resourceId: resolved.id,
+        branchId: resolved.branchId,
+        metadata: { resolutionNotes: resolved.resolutionNotes },
+      }),
+      async (transaction) => {
+        const update = await transaction.cashReconciliation.updateMany({
+          where: {
+            id: existing.id,
+            status: "flagged",
+            followUpNotes: { not: "" },
+          },
+          data: {
+            status: "resolved",
+            resolutionNotes,
+            resolvedAt: new Date(),
+            resolvedById: req.user.id,
+          },
+        });
+        if (update.count !== 1) {
+          const error = new Error("This flagged cash close has already been resolved.");
+          error.statusCode = 409;
+          throw error;
+        }
+        return transaction.cashReconciliation.findUnique({
+          where: { id: existing.id },
+          include: closingInclude,
+        });
+      },
+    );
+    res.json({ reconciliation: closing });
+  } catch (error) {
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({ message: error.message });
+    }
+    console.error("Resolve flagged cash reconciliation error:", error);
+    res.status(500).json({ message: "Failed to resolve flagged cash close." });
   }
 };
