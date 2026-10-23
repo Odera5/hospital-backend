@@ -15,6 +15,9 @@ build/
 # Environment files (keep secrets safe)
 .env
 
+# Runtime uploads may contain private patient records and clinic branding
+uploads/
+
 # OS files
 .DS_Store
 Thumbs.db

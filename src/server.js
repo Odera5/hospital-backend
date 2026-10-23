@@ -1,5 +1,4 @@
 import "dotenv/config";
-import { execSync } from "child_process";
 import connectDB from "./db.js";
 import {
   startAppointmentReminderWorker,
@@ -53,23 +52,8 @@ const shutdown = async (signal) => {
   }
 };
 
-const runMigrations = () => {
-  console.log("Running pending database migrations...");
-  try {
-    const output = execSync("npx prisma migrate deploy", { stdio: "pipe" });
-    console.log("Migration output:", output.toString());
-    console.log("Database migrations applied successfully.");
-  } catch (error) {
-    console.error("Failed to run migrations:", error.message);
-    if (error.stdout) console.error("Migration stdout:", error.stdout.toString());
-    if (error.stderr) console.error("Migration stderr:", error.stderr.toString());
-    throw error;
-  }
-};
-
 const startServer = async () => {
   try {
-    runMigrations();
     await connectDB();
     startRateLimitCleanup();
     server = app.listen(PORT, () => {

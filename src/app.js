@@ -44,14 +44,43 @@ const REQUIRED_ENV_VARS = [
   "JWT_REFRESH_SECRET",
   "ENCRYPTION_KEY",
 ];
+const REQUIRED_PRODUCTION_ENV_VARS = [
+  "CORS_ORIGIN",
+  "R2_ACCOUNT_ID",
+  "R2_ACCESS_KEY_ID",
+  "R2_SECRET_ACCESS_KEY",
+  "R2_BUCKET_NAME",
+  "CLOUDFLARE_TURNSTILE_SECRET_KEY",
+];
 
-const missingEnvVars = REQUIRED_ENV_VARS.filter(
+const requiredEnvVars = [
+  ...REQUIRED_ENV_VARS,
+  ...(isProduction ? REQUIRED_PRODUCTION_ENV_VARS : []),
+];
+const missingEnvVars = requiredEnvVars.filter(
   (name) => !process.env[name]?.trim(),
 );
+if (
+  isProduction &&
+  !process.env.APP_BASE_URL?.trim() &&
+  !process.env.FRONTEND_URL?.trim()
+) {
+  missingEnvVars.push("APP_BASE_URL (or FRONTEND_URL)");
+}
 
 if (missingEnvVars.length > 0) {
   throw new Error(
     `Missing required environment variables: ${missingEnvVars.join(", ")}`,
+  );
+}
+
+if (
+  isProduction &&
+  process.env.CLOUDFLARE_TURNSTILE_SECRET_KEY ===
+    "1x0000000000000000000000000000000AA"
+) {
+  throw new Error(
+    "A production Cloudflare Turnstile secret must replace the test secret.",
   );
 }
 
@@ -157,7 +186,7 @@ app.use((req, res) => {
 });
 
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error(err);
 
   if (err?.type === "entity.too.large") {
     return res.status(413).json({ message: "Request payload is too large" });
@@ -171,11 +200,14 @@ app.use((err, req, res, next) => {
     return res.status(403).json({ message: "Origin is not allowed" });
   }
 
-  const payload = {
-    message: "Server error",
-    error: err?.message || String(err),
-    ...(process.env.NODE_ENV !== "production" ? { stack: err?.stack } : {}),
-  };
+  const payload =
+    process.env.NODE_ENV === "production"
+      ? { message: "Server error" }
+      : {
+          message: "Server error",
+          error: err?.message || String(err),
+          ...(err?.stack ? { stack: err.stack } : {}),
+        };
 
   res.status(500).json(payload);
 });

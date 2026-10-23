@@ -20,37 +20,30 @@ function normalizePatientString(value, fallback = "") {
 export function encryptPatientValue(text) {
   if (!text || typeof text !== "string") return text;
 
-  try {
-    const iv = crypto.randomBytes(IV_LENGTH);
-    const cipher = crypto.createCipheriv(algorithm, ENCRYPTION_KEY, iv);
-    let encrypted = cipher.update(text, "utf8");
-    encrypted = Buffer.concat([encrypted, cipher.final()]);
-    return `${iv.toString("hex")}:${encrypted.toString("hex")}`;
-  } catch (error) {
-    console.error("Encryption error:", error);
-    return text;
-  }
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv(algorithm, ENCRYPTION_KEY, iv);
+  let encrypted = cipher.update(text, "utf8");
+  encrypted = Buffer.concat([encrypted, cipher.final()]);
+  return `${iv.toString("hex")}:${encrypted.toString("hex")}`;
 }
 
 export function decryptPatientValue(text) {
   if (!text || typeof text !== "string") return text;
 
-  try {
-    const [ivHex, encryptedHex] = text.split(":");
-    if (!ivHex || !encryptedHex) return text;
-
-    const iv = Buffer.from(ivHex, "hex");
-    const encryptedText = Buffer.from(encryptedHex, "hex");
-    const decipher = crypto.createDecipheriv(algorithm, ENCRYPTION_KEY, iv);
-
-    let decrypted = decipher.update(encryptedText);
-    decrypted = Buffer.concat([decrypted, decipher.final()]);
-
-    return decrypted.toString();
-  } catch (error) {
-    console.error("Decryption error:", error);
+  const [ivHex, encryptedHex] = text.split(":");
+  if (
+    !/^[a-f\d]{32}$/i.test(ivHex || "") ||
+    !/^(?:[a-f\d]{32})+$/i.test(encryptedHex || "")
+  ) {
     return text;
   }
+
+  const iv = Buffer.from(ivHex, "hex");
+  const encryptedText = Buffer.from(encryptedHex, "hex");
+  const decipher = crypto.createDecipheriv(algorithm, ENCRYPTION_KEY, iv);
+  let decrypted = decipher.update(encryptedText);
+  decrypted = Buffer.concat([decrypted, decipher.final()]);
+  return decrypted.toString();
 }
 
 export function toEncryptedPatientData(data = {}) {
