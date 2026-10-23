@@ -1,8 +1,12 @@
 import express from "express";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
-import { logAuditEvent } from "../services/auditLog.js";
+import {
+  logAuditEvent,
+  withAuditedTransaction,
+} from "../services/auditLog.js";
 import { protect, authorizeRoles } from "../middleware/authorize.js";
 import { generateAccessToken, generateRefreshToken } from "../utils/jwt.js";
 import {
@@ -206,6 +210,7 @@ const serializeUser = (user) => ({
   name: user.name,
   email: user.email,
   role: user.role,
+  isClinicOwner: Boolean(user.isClinicOwner),
   canAccessBilling: Boolean(user.canAccessBilling),
   customRoleTitle: user.customRoleTitle || null,
   dateOfBirth: user.dateOfBirth || null,
@@ -302,6 +307,9 @@ const doAssignedBranchesFitWithinActorScope = (
 
 const canActorManageUser = (actor, targetUser) => {
   if (actor.role === "admin") {
+    if (targetUser.role === "admin") {
+      return Boolean(actor.isClinicOwner) && actor.id !== targetUser.id;
+    }
     return true;
   }
 
@@ -377,10 +385,20 @@ const getCurrentActiveBranch = async (req) => {
   });
 };
 
-const ensureAnotherActiveAdminExists = async (userId, clinicId) => {
-  const targetUser = await getUserById(userId);
+const ensureAnotherActiveAdminExists = async (
+  userId,
+  clinicId,
+  transaction = prisma,
+) => {
+  const targetUser = await transaction.user.findUnique({
+    where: { id: userId },
+  });
 
   if (!targetUser || targetUser.clinicId !== clinicId) {
+    return false;
+  }
+
+  if (targetUser.isClinicOwner) {
     return false;
   }
 
@@ -388,7 +406,7 @@ const ensureAnotherActiveAdminExists = async (userId, clinicId) => {
     return true;
   }
 
-  const activeAdminCount = await prisma.user.count({
+  const activeAdminCount = await transaction.user.count({
     where: {
       clinicId,
       role: "admin",
@@ -1019,6 +1037,7 @@ router.post(
             email: normalizedAdminEmail,
             password: hashedPassword,
             role: "admin",
+            isClinicOwner: true,
             clinicId: createdClinic.id,
             emailVerified: false,
             emailVerificationToken: verification.token,
@@ -1263,6 +1282,163 @@ router.get(
 );
 
 router.patch(
+  "/staff/:id/role",
+  protect,
+  authorizeRoles("admin"),
+  async (req, res) => {
+    try {
+      const role = String(req.body?.role || "").trim();
+      if (!["admin", "branch_manager", "doctor", "nurse"].includes(role)) {
+        return res.status(400).json({ message: "Select a valid staff role." });
+      }
+      if (isSubscriptionExpired(req.user.clinic)) {
+        return res.status(403).json({
+          message: getAdminSubscriptionExpiredMessage(),
+          errorCode: "SUBSCRIPTION_EXPIRED",
+        });
+      }
+      if (req.params.id === req.user.id) {
+        return res.status(400).json({
+          message: "You cannot change your own staff role.",
+        });
+      }
+      if (role === "branch_manager" && !hasEnterpriseAccess(req.user.clinic)) {
+        return res.status(403).json({
+          message: "Branch Manager accounts require an active Enterprise plan.",
+          errorCode: "UPGRADE_REQUIRED",
+        });
+      }
+
+      const existingUser = await getUserById(req.params.id);
+      if (!existingUser || existingUser.clinicId !== req.user.clinicId) {
+        return res.status(404).json({ message: "Staff account not found" });
+      }
+      if (
+        (role === "admin" || existingUser.role === "admin") &&
+        !req.user.isClinicOwner
+      ) {
+        return res.status(403).json({
+          message:
+            "Only the Clinic Owner can promote or change another admin's role.",
+        });
+      }
+      if (existingUser.isClinicOwner) {
+        return res.status(403).json({
+          message:
+            "The Clinic Owner role is protected. Transfer ownership through the designated ownership-transfer process.",
+        });
+      }
+      if (existingUser.role === "billing_staff") {
+        return res.status(409).json({
+          message:
+            "Convert this legacy Billing Staff account before changing its role.",
+        });
+      }
+
+      let assignedBranchIds = [];
+      if (role !== "admin") {
+        const branchAssignment = await resolveValidAssignedBranchIds({
+          clinicId: req.user.clinicId,
+          role,
+          assignedBranchIds: req.body?.assignedBranchIds,
+        });
+        if (branchAssignment.error) {
+          return res.status(branchAssignment.error.status).json({
+            message: branchAssignment.error.message,
+          });
+        }
+        assignedBranchIds = branchAssignment.branchIds;
+      }
+
+      const updatedUser = await withAuditedTransaction(
+        req,
+        (updated) => ({
+          action: "user.role.update",
+          resourceType: "user",
+          resourceId: updated.id,
+          metadata: {
+            previousRole: existingUser.role,
+            role: updated.role,
+            assignedBranchIds: updated.assignedBranchIds,
+          },
+        }),
+        async (transaction) => {
+          const target = await transaction.user.findFirst({
+            where: { id: existingUser.id, clinicId: req.user.clinicId },
+          });
+          if (!target) {
+            const error = new Error("Staff account not found");
+            error.statusCode = 404;
+            throw error;
+          }
+          if (target.isClinicOwner) {
+            const error = new Error("The Clinic Owner role is protected.");
+            error.statusCode = 403;
+            throw error;
+          }
+          if (
+            target.role === "admin" &&
+            !req.user.isClinicOwner
+          ) {
+            const error = new Error(
+              "Only the Clinic Owner can change another admin's role.",
+            );
+            error.statusCode = 403;
+            throw error;
+          }
+          if (
+            target.role === "admin" &&
+            role !== "admin" &&
+            !(await ensureAnotherActiveAdminExists(
+              target.id,
+              req.user.clinicId,
+              transaction,
+            ))
+          ) {
+            const error = new Error(
+              "The clinic must retain at least one active admin.",
+            );
+            error.statusCode = 409;
+            throw error;
+          }
+
+          return transaction.user.update({
+            where: { id: target.id },
+            data: {
+              role,
+              assignedBranchIds,
+              refreshToken: null,
+            },
+            include: { clinic: true },
+          });
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+
+      res.json({
+        message: `Staff role changed to ${role}. They must sign in again.`,
+        user: serializeUser(updatedUser),
+      });
+    } catch (error) {
+      if (error.statusCode) {
+        return res.status(error.statusCode).json({ message: error.message });
+      }
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2034"
+      ) {
+        return res.status(409).json({
+          message:
+            "Staff roles changed concurrently. Refresh the staff list and try again.",
+        });
+      }
+      console.error("Update staff role error:", error);
+      res.status(500).json({ message: "Failed to update staff role." });
+    }
+  },
+);
+
+router.patch(
   "/staff/:id/convert-legacy-billing-role",
   protect,
   authorizeRoles("admin"),
@@ -1493,6 +1669,11 @@ router.patch(
       }
 
       if (!canActorManageUser(req.user, existingUser)) {
+        if (existingUser.isClinicOwner) {
+          return res.status(403).json({
+            message: "The Clinic Owner account cannot be deactivated.",
+          });
+        }
         return res.status(403).json({
           message: "You can only update staff in branches you manage.",
         });
@@ -1567,6 +1748,11 @@ router.delete(
       }
 
       if (!canActorManageUser(req.user, existingUser)) {
+        if (existingUser.isClinicOwner) {
+          return res.status(403).json({
+            message: "The Clinic Owner account cannot be deleted.",
+          });
+        }
         return res.status(403).json({
           message: "You can only delete staff in branches you manage.",
         });

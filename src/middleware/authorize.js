@@ -35,6 +35,7 @@ export const protect = async (req, res, next) => {
         u.name,
         u.email,
         u.role,
+        u."isClinicOwner",
         u."canAccessBilling",
         u."assignedBranchIds",
         u."isActive",
