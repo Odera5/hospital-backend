@@ -202,7 +202,8 @@ export const reviewCashReconciliation = async (req, res) => {
     }
     if (existing.submittedById === req.user.id) {
       return res.status(403).json({
-        message: "A cash close must be reviewed by a different staff member.",
+        message:
+          "You cannot review your own cash close. Another admin or assigned branch manager must review it.",
       });
     }
 
