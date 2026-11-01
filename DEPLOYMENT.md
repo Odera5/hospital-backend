@@ -28,7 +28,7 @@ Before doing this for production:
 
 1. Take a database backup and confirm it is restorable.
 2. Apply every pending migration to a staging database with a recent sanitized copy of production-shaped data.
-3. Verify clinic-owner backfill, existing billing data, patient access, and the new cash reconciliation follow-up fields.
+3. Verify clinic-owner backfill, existing billing data, and patient access.
 4. Deploy the application only after the migration succeeds.
 
 `prisma migrate deploy` applies **all pending migrations**, not just the newest migration. Do not use `migrate dev` or `db push` against production. Prefer a forward-fix migration over manually editing migration history or attempting an untested rollback.
@@ -63,8 +63,8 @@ In staging, use synthetic patient data to verify:
 1. Clinic registration, email verification, login, role changes, and branch restrictions.
 2. Patient creation, chart updates, consent edits, attachment upload, and authorized attachment retrieval.
 3. Appointment creation, patient responses, reminder delivery, and waiting-room workflow.
-4. Invoice creation, cash/card/bank payment, reversal, cash close, independent review, flagged investigation, and resolution.
-5. Audit-log entries for patient, permission, billing, and cash-close actions.
+4. Invoice creation, cash/card/bank payment, and payment reversal.
+5. Audit-log entries for patient, permission, and billing actions.
 6. Subscription-expiration behavior and clinic access recovery after renewal.
 7. A database-and-attachment restore in an isolated environment.
 

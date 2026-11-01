@@ -34,11 +34,6 @@ model User {
   auditLogs                  AuditLog[]
   recordedBillingPayments    BillingPayment[]     @relation("BillingPaymentRecorder")
   reversedBillingPayments    BillingPayment[]     @relation("BillingPaymentReverser")
-  submittedCashClosings      CashReconciliation[] @relation("CashClosingSubmitter")
-  reviewedCashClosings       CashReconciliation[] @relation("CashClosingReviewer")
-  respondedCashClosings      CashReconciliation[] @relation("CashClosingResponder")
-  resolvedCashClosings       CashReconciliation[] @relation("CashClosingResolver")
-
   @@index([clinicId, role])
 }
 
@@ -135,7 +130,6 @@ model Clinic {
   branches                       Branch[]
   patients                       Patient[]
   pendingIntakes                 PendingIntake[]
-  cashReconciliations            CashReconciliation[]
   plan                           PlanType              @default(PRO)
   logoUrl                        String?
   brandColor                     String?
@@ -179,8 +173,6 @@ model Branch {
   invoices            Invoice[]
   auditLogs           AuditLog[]
   billingPayments     BillingPayment[]
-  cashReconciliations CashReconciliation[]
-
   @@unique([clinicId, slug])
   @@index([clinicId, isActive, createdAt])
 }
@@ -368,40 +360,6 @@ model BillingPayment {
   @@index([invoiceId, recordedAt])
   @@index([branchId, recordedAt])
   @@index([recordedById, recordedAt])
-}
-
-model CashReconciliation {
-  id              String    @id @default(cuid())
-  clinicId        String
-  branchId        String
-  businessDate    String
-  timezone        String
-  expectedCash    Float
-  countedCash     Float
-  variance        Float
-  status          String    @default("pending")
-  notes           String    @default("")
-  reviewerNotes   String    @default("")
-  submittedAt     DateTime  @default(now())
-  submittedById   String?
-  reviewedAt      DateTime?
-  reviewedById    String?
-  followUpNotes   String    @default("")
-  respondedAt     DateTime?
-  respondedById   String?
-  resolutionNotes String    @default("")
-  resolvedAt      DateTime?
-  resolvedById    String?
-  clinic          Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-  branch          Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  submittedBy     User?     @relation("CashClosingSubmitter", fields: [submittedById], references: [id], onDelete: SetNull)
-  reviewedBy      User?     @relation("CashClosingReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
-  respondedBy     User?     @relation("CashClosingResponder", fields: [respondedById], references: [id], onDelete: SetNull)
-  resolvedBy      User?     @relation("CashClosingResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
-
-  @@unique([branchId, businessDate])
-  @@index([clinicId, businessDate])
-  @@index([branchId, status, businessDate])
 }
 
 model AuditLog {

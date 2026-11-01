@@ -25,7 +25,6 @@ test("Pre-onboarding Smoke Test Suite (DEPLOYMENT.md)", async (t) => {
   let waitingRoomId;
   let invoiceId;
   let paymentId;
-  let cashReconciliationId;
 
   try {
     // -------------------------------------------------------------
@@ -216,9 +215,9 @@ test("Pre-onboarding Smoke Test Suite (DEPLOYMENT.md)", async (t) => {
     });
 
     // -------------------------------------------------------------
-    // 4. Invoice, payments, reversals, cash close & review
+    // 4. Invoice, payments, and reversals
     // -------------------------------------------------------------
-    await t.test("4. Invoice creation, payments, reversal, cash close & review", async () => {
+    await t.test("4. Invoice creation, payments, and reversal", async () => {
       const invoice = await prisma.invoice.create({
         data: {
           invoiceNumber: `INV-${uniqueId}`,
@@ -268,50 +267,12 @@ test("Pre-onboarding Smoke Test Suite (DEPLOYMENT.md)", async (t) => {
       assert.equal(reversal.reversalOfId, paymentId);
       assert.equal(reversal.kind, "reversal");
 
-      // Cash Reconciliation (daily close)
-      const today = new Date().toISOString().slice(0, 10);
-      const cashClose = await prisma.cashReconciliation.create({
-        data: {
-          clinicId,
-          branchId: branchAId,
-          businessDate: `${today}_${uniqueId.slice(0, 8)}`,
-          timezone: "UTC",
-          expectedCash: 25000,
-          countedCash: 24500,
-          variance: -500,
-          status: "pending",
-          notes: "End of shift cash count",
-          submittedById: ownerId,
-        },
-      });
-      cashReconciliationId = cashClose.id;
-      assert.equal(cashClose.variance, -500);
-
-      // Review, follow-up, and resolve
-      const reviewed = await prisma.cashReconciliation.update({
-        where: { id: cashReconciliationId },
-        data: {
-          status: "flagged",
-          reviewerNotes: "500 NGN variance requires staff explanation",
-          reviewedAt: new Date(),
-          reviewedById: ownerId,
-          followUpNotes: "Staff explained change was given from drawer reserve",
-          respondedAt: new Date(),
-          respondedById: doctorId,
-          resolutionNotes: "Discrepancy reconciled against petty cash drawer",
-          resolvedAt: new Date(),
-          resolvedById: ownerId,
-        },
-      });
-      assert.equal(reviewed.status, "flagged");
-      assert.equal(reviewed.followUpNotes.length > 0, true);
-      assert.equal(reviewed.resolutionNotes.length > 0, true);
     });
 
     // -------------------------------------------------------------
     // 5. Audit-log entries
     // -------------------------------------------------------------
-    await t.test("5. Audit-log entries for patient, role, billing, cash close", async () => {
+    await t.test("5. Audit-log entries for patient, role, and billing", async () => {
       const audit = await prisma.auditLog.create({
         data: {
           actorId: ownerId,
@@ -358,9 +319,6 @@ test("Pre-onboarding Smoke Test Suite (DEPLOYMENT.md)", async (t) => {
     // Clean up all synthetic test data created during smoke test
     // -------------------------------------------------------------
     try {
-      if (cashReconciliationId) {
-        await prisma.cashReconciliation.deleteMany({ where: { id: cashReconciliationId } });
-      }
       if (paymentId) {
         await prisma.billingPayment.deleteMany({ where: { invoiceId } });
       }

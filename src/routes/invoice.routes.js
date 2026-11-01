@@ -3,11 +3,6 @@ import { verifyToken } from "../middleware/verifyToken.js";
 import { authorizeBillingAccess, authorizeRoles } from "../middleware/authorize.js";
 import { enforceSubscriptionState } from "../middleware/subscriptionStateGuard.js";
 import {
-  getCashReconciliations,
-  submitCashReconciliation,
-  reviewCashReconciliation,
-} from "../controllers/cashReconciliationController.js";
-import {
   getAllInvoices,
   getInvoice,
   createInvoice,
@@ -32,13 +27,6 @@ router.use(autoUpdateOverdueInvoices);
 router.get("/", getAllInvoices);
 router.get("/report", getInvoiceReport);
 router.get("/patients", getInvoicePatients);
-router.get("/cash-reconciliations", getCashReconciliations);
-router.post("/cash-reconciliations", submitCashReconciliation);
-router.patch(
-  "/cash-reconciliations/:id/review",
-  authorizeRoles("admin"),
-  reviewCashReconciliation,
-);
 router.get("/:id", getInvoice);
 router.post("/", validateInvoice, createInvoice);
 router.put("/:id", validateInvoice, updateInvoice);
