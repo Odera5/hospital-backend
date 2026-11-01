@@ -289,7 +289,7 @@ router.get(
 
       let enterpriseData = null;
       if (req.user.role === "admin" && req.user.clinic?.plan === "ENTERPRISE") {
-        const [branches, branchRevenue, crossAppointments] = await Promise.all([
+        const [branches, branchRevenue, patientRegistrationRows] = await Promise.all([
           prisma.branch.findMany({
             where: { clinicId },
             select: { id: true, name: true, city: true },
@@ -303,18 +303,19 @@ router.get(
             },
             _sum: { amountPaid: true },
           }),
-          prisma.appointment.groupBy({
-            by: ["branchId"],
-            where: {
-              patient: { clinicId },
-              ...(Object.keys(dateFilter).length > 0
-                ? { appointmentDate: dateFilter }
-                : {}),
-            },
-            _count: { id: true },
-          }),
+          prisma.$queryRaw`
+            SELECT
+              p."branchId",
+              to_char(date_trunc('month', p."createdAt"), 'YYYY-MM') AS "monthKey",
+              count(*)::int AS count
+            FROM "Patient" p
+            WHERE p."clinicId" = ${clinicId}
+              AND p."isDeleted" = false
+              AND p."createdAt" >= ${revenueStart}
+              AND p."createdAt" <= ${revenueEnd}
+            GROUP BY p."branchId", date_trunc('month', p."createdAt")
+          `,
         ]);
-        const branchNames = new Map(branches.map((branch) => [branch.id, branch.name]));
         const branchLabels = new Map(
           branches.map((branch) => [
             branch.id,
@@ -327,6 +328,50 @@ router.get(
             Number(item._sum.amountPaid || 0),
           ]),
         );
+        const registrationsByMonth = new Map(
+          patientRegistrationRows.map((row) => [
+            `${row.monthKey}:${row.branchId}`,
+            Number(row.count),
+          ]),
+        );
+        const registrationMonths = [];
+        const registrationMonthCursor = new Date(revenueStart);
+        registrationMonthCursor.setUTCDate(1);
+        registrationMonthCursor.setUTCHours(0, 0, 0, 0);
+        const lastRegistrationMonth = new Date(revenueEnd);
+        lastRegistrationMonth.setUTCDate(1);
+        lastRegistrationMonth.setUTCHours(0, 0, 0, 0);
+        while (
+          registrationMonthCursor <= lastRegistrationMonth &&
+          registrationMonths.length < 36
+        ) {
+          const monthKey = [
+            registrationMonthCursor.getUTCFullYear(),
+            String(registrationMonthCursor.getUTCMonth() + 1).padStart(2, "0"),
+          ].join("-");
+          const branchCounts = Object.fromEntries(
+            branches.map((branch) => [
+              branch.id,
+              registrationsByMonth.get(`${monthKey}:${branch.id}`) || 0,
+            ]),
+          );
+          registrationMonths.push({
+            monthKey,
+            month: new Intl.DateTimeFormat("en", {
+              month: "short",
+              year: "2-digit",
+              timeZone: "UTC",
+            }).format(registrationMonthCursor),
+            ...branchCounts,
+            total: Object.values(branchCounts).reduce(
+              (total, count) => total + count,
+              0,
+            ),
+          });
+          registrationMonthCursor.setUTCMonth(
+            registrationMonthCursor.getUTCMonth() + 1,
+          );
+        }
         enterpriseData = {
           revenueByBranch: branches
             .map((branch) => ({
@@ -335,13 +380,13 @@ router.get(
               total: revenueByBranchMap.get(branch.id) || 0,
             }))
             .sort((left, right) => right.total - left.total),
-          appointmentsByBranch: crossAppointments
-            .filter((item) => item.branchId)
-            .map((item) => ({
-              branchName: branchNames.get(item.branchId) || "Unknown",
-              count: item._count.id,
-            }))
-            .sort((left, right) => right.count - left.count),
+          newPatientsByBranch: {
+            branches: branches.map((branch) => ({
+              branchId: branch.id,
+              branchName: branchLabels.get(branch.id) || "Unknown",
+            })),
+            months: registrationMonths,
+          },
         };
       }
 
