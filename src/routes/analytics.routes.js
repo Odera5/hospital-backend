@@ -292,7 +292,7 @@ router.get(
         const [branches, branchRevenue, crossAppointments] = await Promise.all([
           prisma.branch.findMany({
             where: { clinicId },
-            select: { id: true, name: true },
+            select: { id: true, name: true, city: true },
           }),
           prisma.invoice.groupBy({
             by: ["branchId"],
@@ -315,12 +315,24 @@ router.get(
           }),
         ]);
         const branchNames = new Map(branches.map((branch) => [branch.id, branch.name]));
+        const branchLabels = new Map(
+          branches.map((branch) => [
+            branch.id,
+            branch.city ? `${branch.name} - ${branch.city}` : branch.name,
+          ]),
+        );
+        const revenueByBranchMap = new Map(
+          branchRevenue.map((item) => [
+            item.branchId,
+            Number(item._sum.amountPaid || 0),
+          ]),
+        );
         enterpriseData = {
-          revenueByBranch: branchRevenue
-            .filter((item) => item.branchId)
-            .map((item) => ({
-              branchName: branchNames.get(item.branchId) || "Unknown",
-              total: Number(item._sum.amountPaid || 0),
+          revenueByBranch: branches
+            .map((branch) => ({
+              branchId: branch.id,
+              branchName: branchLabels.get(branch.id) || "Unknown",
+              total: revenueByBranchMap.get(branch.id) || 0,
             }))
             .sort((left, right) => right.total - left.total),
           appointmentsByBranch: crossAppointments
