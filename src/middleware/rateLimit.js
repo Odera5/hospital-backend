@@ -155,6 +155,19 @@ const createLimiter = ({
     message: { message },
     standardHeaders: true,
     legacyHeaders: false,
+    handler: (req, res, _next, options) => {
+      console.warn(
+        JSON.stringify({
+          event: "rate_limit_exceeded",
+          limiter: id,
+          method: req.method,
+          route: req.route?.path
+            ? `${req.baseUrl}${req.route.path}`
+            : req.baseUrl || "/api",
+        }),
+      );
+      res.status(options.statusCode).send(options.message);
+    },
   });
 
 const createIpAndTargetLimiters = ({
@@ -195,6 +208,13 @@ export const authenticatedApiLimiter = createLimiter({
   max: 1500,
   message: "Too many API requests for this account. Please try again later.",
   keyGenerator: getUserKey,
+});
+
+export const publicIntakeLimiter = createLimiter({
+  id: "public-intake",
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: "Too many intake submissions from this IP. Please try again later.",
 });
 
 /**

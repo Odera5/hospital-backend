@@ -1,10 +1,10 @@
 import express from "express";
-import rateLimit from "express-rate-limit";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { logAuditEvent } from "../services/auditLog.js";
 import { toEncryptedPatientData } from "../utils/patientCrypto.js";
 import { SLOT_MINUTES, listAvailableSlots } from "../utils/appointmentScheduling.js";
+import { publicIntakeLimiter } from "../middleware/rateLimit.js";
 import {
   hasActiveProAccess,
   getUpgradeRequiredMessage,
@@ -22,12 +22,6 @@ const isPatientCardSequenceConflict = (error) =>
   Array.isArray(error.meta?.target) &&
   error.meta.target.includes("clinicId") &&
   error.meta.target.includes("cardNumberSequence");
-
-const intakeLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // Limit each IP to 10 intake submissions per window
-  message: { message: "Too many intake submissions from this IP. Please try again later." }
-});
 
 const intakeAccessClinicSelect = {
   id: true,
@@ -221,7 +215,7 @@ router.get("/:clinicId/available-slots", async (req, res) => {
 });
 
 // POST /api/intake/:clinicId - Submit a new patient
-router.post("/:clinicId", intakeLimiter, validatePublicIntake, async (req, res) => {
+router.post("/:clinicId", publicIntakeLimiter, validatePublicIntake, async (req, res) => {
   try {
     const { clinicId } = req.params;
 

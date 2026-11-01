@@ -54,6 +54,7 @@ Before doing this for production:
 - Start with one backend application instance. The server currently starts reminder, birthday, patient-index, and Trash-cleanup jobs in-process; running multiple uncoordinated instances may duplicate some work.
 - Do not scale backend replicas until background jobs have a single-worker deployment or reliable distributed coordination.
 - Configure HTTPS, health/readiness monitoring (`/health` and `/ready`), log retention/access controls, and an alert path for database or object-storage failures.
+- Monitor structured `rate_limit_exceeded` events in backend logs before adjusting rate-limit thresholds; public intake counters are stored in PostgreSQL and shared across backend instances.
 - Review error logs for patient information before forwarding logs to third-party monitoring services.
 
 ## Pre-onboarding smoke test
