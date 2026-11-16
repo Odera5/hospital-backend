@@ -35,6 +35,8 @@ Before doing this for production:
 
 `prisma migrate deploy` applies **all pending migrations**, not just the newest migration. Do not use `migrate dev` or `db push` against production. Prefer a forward-fix migration over manually editing migration history or attempting an untested rollback.
 
+The subscription-history migration creates the table required by plan upgrades and trial eligibility checks. Apply it before deploying code that queries subscription history.
+
 ## Backups and recovery
 
 - Schedule automated PostgreSQL backups and retain them according to clinic agreements and applicable local requirements.
