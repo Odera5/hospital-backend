@@ -18,6 +18,7 @@ import {
   verifyPaystackSignature,
   verifyPaystackTransaction,
 } from "../services/paystack.js";
+import { notifyAdminOperationalIssue } from "../services/platformAlertService.js";
 
 const buildPaystackVerificationResponse = ({
   clinic,
@@ -500,7 +501,7 @@ export const handlePaystackWebhook = async (req, res) => {
     // Process asynchronously (fire-and-forget). Use a microtask so we don't await.
     void (async () => {
       try {
-        await processPaystackWebhookEvent(event);
+        await processPaystackWebhookEvent(event, { webhookId: eventHash });
         // mark processed if DB available
         try {
           await prisma.billingWebhook.update({
@@ -512,6 +513,7 @@ export const handlePaystackWebhook = async (req, res) => {
         }
       } catch (procErr) {
         console.error("Error processing Paystack webhook event:", procErr);
+        void notifyAdminOperationalIssue("billing webhook processing");
       }
     })();
 

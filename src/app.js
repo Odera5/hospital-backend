@@ -16,10 +16,12 @@ import billingRoutes from "./routes/billing.routes.js";
 import dashboardRoutes from "./routes/dashboard.routes.js";
 import branchRoutes from "./routes/branch.routes.js";
 import auditLogRoutes from "./routes/auditLog.routes.js";
+import platformRoutes from "./routes/platform.routes.js";
 import { apiLimiter } from "./middleware/rateLimit.js";
 import { logger } from "./middleware/logger.js";
 import { handlePaystackWebhook } from "./controllers/billingController.js";
 import { prisma } from "./lib/prisma.js";
+import { notifyAdminOperationalIssue } from "./services/platformAlertService.js";
 
 const app = express();
 const isProduction = process.env.NODE_ENV === "production";
@@ -123,6 +125,7 @@ app.get("/ready", async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
+    void notifyAdminOperationalIssue("database readiness check");
     res.status(503).json({
       status: "not_ready",
       timestamp: new Date().toISOString(),
@@ -178,6 +181,7 @@ app.use("/api/intake", intakeRoutes);
 app.use("/api/pending-intakes", pendingIntakesRoutes);
 app.use("/api/billing", billingRoutes);
 app.use("/api/audit-logs", auditLogRoutes);
+app.use("/api/platform", platformRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ message: "Endpoint not found" });

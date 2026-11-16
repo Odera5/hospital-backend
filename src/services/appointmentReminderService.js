@@ -4,6 +4,7 @@ import {
   hasReminderAccess,
   getReminderAccessRequiredMessage,
 } from "../utils/subscriptionAccess.js";
+import { notifyAdminOperationalIssue } from "./platformAlertService.js";
 
 const RESEND_API_URL = "https://api.resend.com/emails";
 const TWILIO_API_BASE_URL = "https://api.twilio.com/2010-04-01";
@@ -1043,6 +1044,7 @@ export const processAppointmentReminders = async () => {
       console.error(
         `Appointment reminder worker disabled: database schema is missing one or more required columns (${error?.meta?.column || error?.message || "unknown column"}). Run Prisma migrations on the deployed database.`,
       );
+      void notifyAdminOperationalIssue("appointment reminder schema");
       return;
     }
 
@@ -1076,20 +1078,24 @@ export const startAppointmentReminderWorker = () => {
 
   processAppointmentReminders().catch((error) => {
     console.error("Initial appointment reminder job failed:", error.message);
+    void notifyAdminOperationalIssue("appointment reminder worker");
   });
   processAppointmentNotifications().catch((error) => {
     console.error("Initial appointment notification job failed:", error.message);
+    void notifyAdminOperationalIssue("appointment notification worker");
   });
 
   reminderIntervalId = setInterval(() => {
     processAppointmentReminders().catch((error) => {
       console.error("Appointment reminder job failed:", error.message);
+      void notifyAdminOperationalIssue("appointment reminder worker");
     });
   }, REMINDER_POLL_INTERVAL_MS);
 
   notificationIntervalId = setInterval(() => {
     processAppointmentNotifications().catch((error) => {
       console.error("Appointment notification job failed:", error.message);
+      void notifyAdminOperationalIssue("appointment notification worker");
     });
   }, NOTIFICATION_POLL_INTERVAL_MS);
 

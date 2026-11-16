@@ -12,6 +12,8 @@ Use this checklist before enabling a clinic account that contains real patient i
 - Configure all four R2 variables: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_BUCKET_NAME`. Keep the bucket private; patient attachments are served through authorized routes and short-lived signed URLs.
 - Replace the Cloudflare Turnstile test key from `.env.example` with a production secret and configure the matching frontend site key.
 - Configure and test at least one supported clinic email delivery channel if email verification, appointment notifications, or reminders are part of the clinic’s workflow.
+- Set `ADMIN_NOTIFICATION_EMAIL` to the CareChrome team inbox for trial follow-up digests, and set `PLATFORM_ADMIN_EMAILS` to a comma-separated allowlist of staff email addresses. Allowlisted staff must also sign in with an active, verified CareChrome account to view `/platform/trial-follow-ups`.
+- The internal inbox also receives subscription-payment failure alerts, permanent-deletion notices, and rate-limited background-service/database alerts. Operational alerts are limited to one per component every six hours and omit patient details.
 - Store all credentials in the hosting provider’s secret manager. Never commit `.env` files or include them in build artifacts.
 
 The backend refuses to start in production if its required CORS, public app URL, R2, or Turnstile configuration is missing, or if the known Turnstile test secret is used.
@@ -47,13 +49,15 @@ Before doing this for production:
 - New clinical attachments use private object storage. Do not make the R2 bucket public or expose its credentials to the browser.
 - Patient demographics are only partially encrypted by the current application. Keep database encryption at rest enabled and restrict database access to the backend service.
 - Do not count `src/middleware/fileEncryptor.js` as active protection; it is not wired into the attachment flow.
-- The Trash screen tells users that trashed patients are automatically permanently deleted after six months. Explain this retention behavior during onboarding and verify it aligns with each clinic’s retention policy before enabling automatic cleanup.
+- Trashed patients and clinical records remain recoverable. Permanent deletion is admin-only, requires a documented reason, and is recorded in the audit log; patient charts with payment history are protected. Establish applicable retention and legal-hold requirements before using permanent deletion.
 
 ## MVP runtime topology
 
-- Start with one backend application instance. The server currently starts reminder, birthday, patient-index, and Trash-cleanup jobs in-process; running multiple uncoordinated instances may duplicate some work.
+- Start with one backend application instance. The server currently starts reminder, birthday, trial follow-up, and patient-index jobs in-process; running multiple uncoordinated instances may duplicate some work.
 - Do not scale backend replicas until background jobs have a single-worker deployment or reliable distributed coordination.
+- The trial follow-up worker sends one internal digest when unpaid active trials reach 7-, 3-, or 1-day reminders, or expire. It excludes clinics with subscription history and does not include patient or clinical data. Verify the configured notification inbox and delivery channel before enabling the worker in production.
 - Configure HTTPS, health/readiness monitoring (`/health` and `/ready`), log retention/access controls, and an alert path for database or object-storage failures.
+- Use the hosting, database, and object-storage providers’ monitoring for total service outages and backup failures; the application cannot reliably email when its host is down or a backup job is external.
 - Monitor structured `rate_limit_exceeded` events in backend logs before adjusting rate-limit thresholds; public intake counters are stored in PostgreSQL and shared across backend instances.
 - Review error logs for patient information before forwarding logs to third-party monitoring services.
 

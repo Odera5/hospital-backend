@@ -1,6 +1,7 @@
 import { prisma } from "../lib/prisma.js";
 import { toDecryptedPatient } from "../utils/patientCrypto.js";
 import { sendBirthdayGreetingEmail } from "./emailVerification.js";
+import { notifyAdminOperationalIssue } from "./platformAlertService.js";
 
 export const sendDailyBirthdayGreetings = async () => {
   try {
@@ -71,6 +72,7 @@ export const sendDailyBirthdayGreetings = async () => {
     console.log(`[Birthday Worker] Finished daily check. Sent ${sentCount} birthday greeting(s).`);
   } catch (error) {
     console.error("[Birthday Worker] Failed to run daily birthday greetings:", error);
+    void notifyAdminOperationalIssue("birthday greeting worker");
   }
 };
 

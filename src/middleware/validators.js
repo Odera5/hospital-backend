@@ -153,6 +153,7 @@ export const validateAppointmentUpdate = [
 // Intake validation
 // =========================
 export const validatePublicIntake = [
+  body("submissionKey").isUUID("4").withMessage("A valid submission key is required"),
   body("name").trim().notEmpty().withMessage("Name is required"),
   body("age").notEmpty().withMessage("Age is required").isInt({ min: 0, max: 120 }).withMessage("Age must be a number between 0 and 120"),
   body("email").optional({ checkFalsy: true }).isEmail().withMessage("Invalid email address").normalizeEmail(),

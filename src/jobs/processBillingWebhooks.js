@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { prisma } from "../lib/prisma.js";
 import { processPaystackWebhookEvent } from "../services/paystack.js";
+import { notifyAdminOperationalIssue } from "../services/platformAlertService.js";
 import { fileURLToPath } from "url";
 
 const BATCH_SIZE = Number(process.env.WEBHOOK_BATCH_SIZE || 20);
@@ -20,7 +21,7 @@ async function processBatch() {
   for (const item of items) {
     try {
       console.log(`Processing webhook ${item.id} (attempts=${item.attempts})`);
-      await processPaystackWebhookEvent(item.payload);
+      await processPaystackWebhookEvent(item.payload, { webhookId: item.id });
 
       await prisma.billingWebhook.update({
         where: { id: item.id },
@@ -36,6 +37,7 @@ async function processBatch() {
         `Failed processing webhook ${item.id}:`,
         err?.message || err,
       );
+      await notifyAdminOperationalIssue("billing webhook processing");
       try {
         await prisma.billingWebhook.update({
           where: { id: item.id },

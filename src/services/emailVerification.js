@@ -51,6 +51,56 @@ const getTransporter = () => {
   return transporter;
 };
 
+const getAdminNotificationRecipients = () =>
+  (process.env.ADMIN_NOTIFICATION_EMAIL?.trim() || "primuxcare@gmail.com")
+    .split(",")
+    .map((email) => email.trim())
+    .filter(Boolean);
+
+const sendAdminTextEmail = async (subject, text) => {
+  const recipientEmails = getAdminNotificationRecipients();
+  if (recipientEmails.length === 0) {
+    throw new Error("ADMIN_NOTIFICATION_EMAIL must contain at least one recipient.");
+  }
+
+  if (isResendConfigured()) {
+    const response = await fetch(RESEND_API_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: `CareChrome Alerts <${getSenderEmail()}>`,
+        to: recipientEmails,
+        subject,
+        text,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      const error = new Error(`Resend API error: ${response.status} ${errorText}`);
+      error.code = "RESEND_API_ERROR";
+      throw error;
+    }
+
+    return;
+  }
+
+  await getTransporter().sendMail({
+    from: `"CareChrome Alerts" <${getSenderEmail()}>`,
+    to: recipientEmails.join(", "),
+    subject,
+    text,
+  });
+};
+
+const formatAlertTimestamp = (value) => {
+  const date = new Date(value ?? Date.now());
+  return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
+};
+
 export const createEmailVerification = () => {
   const token = crypto.randomBytes(32).toString("hex");
 
@@ -382,13 +432,7 @@ export const sendBirthdayGreetingEmail = async ({ email, name, clinicName }) => 
 };
 
 export const sendAdminNewClinicAlert = async ({ clinic, adminUser, ipAddress }) => {
-  const adminNotificationEmail =
-    process.env.ADMIN_NOTIFICATION_EMAIL?.trim() || "primuxcare@gmail.com";
-
-  const recipientEmails = adminNotificationEmail
-    .split(",")
-    .map((e) => e.trim())
-    .filter(Boolean);
+  const recipientEmails = getAdminNotificationRecipients();
 
   if (recipientEmails.length === 0) return;
 
@@ -559,4 +603,137 @@ export const getVerificationErrorMessage = (error) => {
   }
 
   return "Verification email could not be sent.";
+};
+
+export const sendAdminTrialFollowUpDigest = async (followUps) => {
+  const recipientEmails = getAdminNotificationRecipients();
+
+  if (recipientEmails.length === 0) {
+    throw new Error("ADMIN_NOTIFICATION_EMAIL must contain at least one recipient.");
+  }
+
+  const appBaseUrl = getBaseUrl().replace(/\/$/, "");
+  const subject = `CareChrome trial follow-ups: ${followUps.length} clinic(s)`;
+  const text = [
+    `There are ${followUps.length} clinic trial follow-up(s) due.`,
+    "",
+    ...followUps.flatMap((followUp, index) => {
+      const { clinic, adminUser, milestone, daysRemaining } = followUp;
+      const status =
+        milestone === "expired"
+          ? "Trial expired"
+          : `Trial expires in ${daysRemaining} day(s)`;
+      return [
+        `${index + 1}. ${clinic.name} (${clinic.id})`,
+        `   Status: ${status}`,
+        `   Trial end: ${new Date(clinic.subscriptionEnds).toLocaleString("en-NG", {
+          dateStyle: "medium",
+          timeStyle: "short",
+          timeZone: "UTC",
+        })} UTC`,
+        `   Clinic email: ${clinic.email || "Not provided"}`,
+        `   Clinic phone: ${clinic.phone || "Not provided"}`,
+        `   Admin: ${adminUser?.name || clinic.contactPerson || "Not provided"} (${adminUser?.email || "No admin email"})`,
+        "",
+      ];
+    }),
+    `Open the internal follow-up list: ${appBaseUrl}/platform/trial-follow-ups`,
+    "",
+    "This message contains clinic account contact details only. Do not add patient or clinical data to follow-up notes.",
+  ].join("\n");
+
+  if (isResendConfigured()) {
+    const response = await fetch(RESEND_API_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: `CareChrome Trial Follow-up <${getSenderEmail()}>`,
+        to: recipientEmails,
+        subject,
+        text,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      const error = new Error(`Resend API error: ${response.status} ${errorText}`);
+      error.code = "RESEND_API_ERROR";
+      throw error;
+    }
+
+    return;
+  }
+
+  await getTransporter().sendMail({
+    from: `"CareChrome Trial Follow-up" <${getSenderEmail()}>`,
+    to: recipientEmails.join(", "),
+    subject,
+    text,
+  });
+};
+
+export const sendAdminPaymentFailureAlert = async ({
+  clinic,
+  eventType,
+  reference,
+  occurredAt = new Date(),
+}) => {
+  await sendAdminTextEmail(
+    "CareChrome alert: subscription payment failed",
+    [
+      "A clinic subscription payment failed.",
+      "",
+      `Clinic: ${clinic.name} (${clinic.id})`,
+      `Clinic email: ${clinic.email || "Not provided"}`,
+      `Event: ${eventType}`,
+      `Payment reference: ${reference || "Not provided"}`,
+      `Received at: ${formatAlertTimestamp(occurredAt)}`,
+      "",
+      "Review the clinic billing status and contact the clinic if follow-up is needed.",
+      "No patient or clinical information is included.",
+    ].join("\n"),
+  );
+};
+
+export const sendAdminPermanentDeletionAlert = async ({
+  clinicId,
+  actorEmail,
+  resourceType,
+  affectedCount,
+  occurredAt = new Date(),
+}) => {
+  await sendAdminTextEmail(
+    "CareChrome security alert: permanent data deletion",
+    [
+      "A permanent deletion was completed in a clinic account.",
+      "",
+      `Clinic ID: ${clinicId}`,
+      `Performed by: ${actorEmail || "Unknown staff account"}`,
+      `Resource type: ${resourceType}`,
+      `Number of items: ${affectedCount}`,
+      `Occurred at: ${formatAlertTimestamp(occurredAt)}`,
+      "",
+      "Review the audit log if follow-up is required. Patient names, record IDs, and deletion reasons are intentionally omitted.",
+    ].join("\n"),
+  );
+};
+
+export const sendAdminOperationalAlert = async ({
+  source,
+  occurredAt = new Date(),
+}) => {
+  await sendAdminTextEmail(
+    `CareChrome operational alert: ${source}`,
+    [
+      "A background service encountered an operational failure.",
+      "",
+      `Service: ${source}`,
+      `Occurred at: ${formatAlertTimestamp(occurredAt)}`,
+      "",
+      "Review the backend logs and service health. Error details are omitted to avoid sending patient information by email.",
+    ].join("\n"),
+  );
 };

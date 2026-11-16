@@ -26,6 +26,8 @@ import { hasEnterpriseAccess } from "../utils/subscriptionAccess.js";
 import {
   buildPatientSearchIndexData,
 } from "../services/patientSearchIndex.js";
+import { sendAdminPermanentDeletionAlert } from "../services/emailVerification.js";
+import { notifyAdminOperationalIssue } from "../services/platformAlertService.js";
 
 const router = express.Router();
 router.use(protect);
@@ -39,6 +41,30 @@ const respondAuditUnavailable = (res, error) => {
 
 const normalizeText = (value) =>
   typeof value === "string" ? value.trim() : "";
+
+const getPermanentDeletionReason = (req, res) => {
+  const reason = normalizeText(req.body?.reason);
+  if (!reason) {
+    res.status(400).json({ message: "A reason is required for permanent deletion." });
+    return null;
+  }
+  if (reason.length > 500) {
+    res.status(400).json({ message: "The deletion reason must be 500 characters or fewer." });
+    return null;
+  }
+  return reason;
+};
+
+const notifyAdminOfPermanentDeletion = (req, resourceType, affectedCount) => {
+  void sendAdminPermanentDeletionAlert({
+    clinicId: req.user.clinicId,
+    actorEmail: req.user.email,
+    resourceType,
+    affectedCount,
+  }).catch((error) => {
+    console.error("Failed to send permanent-deletion alert:", error);
+  });
+};
 
 const normalizeTeeth = (value) => {
   if (!value) return [];
@@ -855,12 +881,14 @@ router.put(
   },
 );
 
-// DELETE /api/patients/trash/permanent - Bulk permanently delete patients
 router.delete(
   "/trash/permanent",
   protect,
   authorizeRoles("admin"),
   async (req, res) => {
+    const reason = getPermanentDeletionReason(req, res);
+    if (!reason) return;
+
     try {
       const { ids } = req.body;
       if (!Array.isArray(ids) || ids.length === 0) {
@@ -877,12 +905,10 @@ router.delete(
       });
 
       if (patientsToDelete.length === 0) {
-        return res
-          .status(404)
-          .json({ message: "No matching trashed patients found" });
+        return res.status(404).json({ message: "No matching trashed patients found" });
       }
 
-      const deleteIds = patientsToDelete.map((p) => p.id);
+      const deleteIds = patientsToDelete.map((patient) => patient.id);
       const paymentHistory = await prisma.billingPayment.findFirst({
         where: { invoice: { patientId: { in: deleteIds } } },
         select: { id: true },
@@ -896,13 +922,13 @@ router.delete(
 
       await withAuditedTransaction(
         req,
-        patientsToDelete.map((p) => ({
+        patientsToDelete.map((patient) => ({
           action: "patient.delete",
           resourceType: "patient",
-          resourceId: p.id,
-          patientId: p.id,
-          branchId: p.branchId,
-          metadata: { permanent: true, bulk: true },
+          resourceId: patient.id,
+          patientId: patient.id,
+          branchId: patient.branchId,
+          metadata: { permanent: true, bulk: true, reason },
         })),
         (transaction) =>
           transaction.patient.deleteMany({
@@ -910,6 +936,11 @@ router.delete(
           }),
       );
 
+      notifyAdminOfPermanentDeletion(
+        req,
+        "patient charts",
+        deleteIds.length,
+      );
       res.json({
         message: `${deleteIds.length} patient(s) permanently deleted successfully`,
         deleteIds,
@@ -917,9 +948,7 @@ router.delete(
     } catch (error) {
       if (respondAuditUnavailable(res, error)) return;
       console.error("Bulk permanent delete error:", error);
-      res
-        .status(500)
-        .json({ message: "Failed to permanently delete patients" });
+      res.status(500).json({ message: "Failed to permanently delete patients" });
     }
   },
 );
@@ -1328,6 +1357,9 @@ router.delete(
   protect,
   authorizeRoles("admin"),
   async (req, res) => {
+    const reason = getPermanentDeletionReason(req, res);
+    if (!reason) return;
+
     try {
       const patient = await prisma.patient.findUnique({
         where: { id: req.params.id },
@@ -1341,8 +1373,7 @@ router.delete(
       }
       if (!patient.isDeleted) {
         return res.status(400).json({
-          message:
-            "Only patients already moved to Trash can be permanently deleted",
+          message: "Only patients already moved to Trash can be permanently deleted",
         });
       }
 
@@ -1364,12 +1395,13 @@ router.delete(
           resourceType: "patient",
           resourceId: patient.id,
           patientId: patient.id,
-          metadata: { permanent: true },
+          metadata: { permanent: true, reason },
         },
         (transaction) =>
           transaction.patient.delete({ where: { id: req.params.id } }),
       );
 
+      notifyAdminOfPermanentDeletion(req, "patient chart", 1);
       res.json({ message: "Patient permanently deleted" });
     } catch (error) {
       if (respondAuditUnavailable(res, error)) return;
@@ -1967,29 +1999,26 @@ router.patch(
 router.delete(
   "/:id/records/:recordId/hard",
   protect,
-  authorizeRoles("admin", "branch_manager", "doctor"),
+  authorizeRoles("admin"),
   async (req, res) => {
+    const reason = getPermanentDeletionReason(req, res);
+    if (!reason) return;
+
     try {
-      const patient = await getPatientOr404(
-        req.params.id,
-        req.user,
-      );
-      if (!patient)
+      const patient = await getPatientOr404(req.params.id, req.user);
+      if (!patient) {
         return res.status(404).json({ message: "Patient not found" });
+      }
 
       const record = await prisma.record.findUnique({
         where: { id: req.params.recordId },
       });
-
       if (!record || record.patientId !== patient.id) {
-        return res
-          .status(404)
-          .json({ message: "Record not found for this patient" });
+        return res.status(404).json({ message: "Record not found for this patient" });
       }
-
       if (!record.isDeleted) {
         return res.status(400).json({
-          message: "Record must be in trash to be permanently deleted",
+          message: "Record must be in Trash to be permanently deleted",
         });
       }
 
@@ -2003,6 +2032,7 @@ router.delete(
           metadata: {
             attachmentCount: normalizeAttachments(record.attachments).length,
             permanent: true,
+            reason,
           },
         },
         (transaction) =>
@@ -2012,13 +2042,15 @@ router.delete(
       for (const attachment of normalizeAttachments(record.attachments)) {
         try {
           await deleteObjectFromS3(`records/${attachment.name}`);
-        } catch (err) {
-          console.error("Failed to delete from S3:", err);
+        } catch (error) {
+          console.error("Failed to delete record attachment from object storage:", error);
+          void notifyAdminOperationalIssue("record attachment storage cleanup");
         }
         const filePath = getLegacyRecordFilePath(attachment.name);
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
       }
 
+      notifyAdminOfPermanentDeletion(req, "clinical record", 1);
       res.json({ message: "Record permanently deleted" });
     } catch (error) {
       if (respondAuditUnavailable(res, error)) return;

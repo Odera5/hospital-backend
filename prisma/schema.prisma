@@ -8,32 +8,33 @@ datasource db {
 }
 
 model User {
-  id                         String               @id @default(cuid())
+  id                         String           @id @default(cuid())
   name                       String
-  email                      String               @unique
+  email                      String           @unique
   password                   String
-  role                       String               @default("nurse")
-  isClinicOwner              Boolean              @default(false)
-  canAccessBilling           Boolean              @default(false)
+  role                       String           @default("nurse")
+  isClinicOwner              Boolean          @default(false)
+  canAccessBilling           Boolean          @default(false)
   customRoleTitle            String?
-  dateOfBirth                String?              @default("")
-  avatarUrl                  String?              @default("")
+  dateOfBirth                String?          @default("")
+  avatarUrl                  String?          @default("")
   clinicId                   String
-  assignedBranchIds          String[]             @default([])
-  isActive                   Boolean              @default(true)
-  emailVerified              Boolean              @default(false)
+  assignedBranchIds          String[]         @default([])
+  isActive                   Boolean          @default(true)
+  emailVerified              Boolean          @default(false)
   emailVerificationToken     String?
   emailVerificationExpiresAt DateTime?
   resetPasswordToken         String?
   resetPasswordExpiresAt     DateTime?
   refreshToken               String?
-  createdAt                  DateTime             @default(now())
-  updatedAt                  DateTime             @updatedAt
-  clinic                     Clinic               @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  createdAt                  DateTime         @default(now())
+  updatedAt                  DateTime         @updatedAt
+  clinic                     Clinic           @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   appointments               Appointment[]
   auditLogs                  AuditLog[]
-  recordedBillingPayments    BillingPayment[]     @relation("BillingPaymentRecorder")
-  reversedBillingPayments    BillingPayment[]     @relation("BillingPaymentReverser")
+  recordedBillingPayments    BillingPayment[] @relation("BillingPaymentRecorder")
+  reversedBillingPayments    BillingPayment[] @relation("BillingPaymentReverser")
+
   @@index([clinicId, role])
 }
 
@@ -103,6 +104,7 @@ model PendingIntake {
   nextOfKinAddress      String    @default("")
   preferredDate         DateTime?
   preferredTime         String    @default("")
+  submissionKey         String?   @unique
   status                String    @default("pending") // pending, approved, rejected
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
@@ -114,28 +116,29 @@ model PendingIntake {
 }
 
 model Clinic {
-  id                             String                @id @default(cuid())
+  id                             String                      @id @default(cuid())
   name                           String
-  email                          String                @unique
-  phone                          String                @default("")
-  country                        String                @default("")
-  city                           String                @default("")
-  address                        String                @default("")
-  contactPerson                  String                @default("")
-  procedurePresetPrices          Json                  @default("[]")
-  isActive                       Boolean               @default(true)
-  createdAt                      DateTime              @default(now())
-  updatedAt                      DateTime              @updatedAt
+  email                          String                      @unique
+  phone                          String                      @default("")
+  country                        String                      @default("")
+  city                           String                      @default("")
+  address                        String                      @default("")
+  contactPerson                  String                      @default("")
+  procedurePresetPrices          Json                        @default("[]")
+  isActive                       Boolean                     @default(true)
+  createdAt                      DateTime                    @default(now())
+  updatedAt                      DateTime                    @updatedAt
   users                          User[]
   branches                       Branch[]
   patients                       Patient[]
   pendingIntakes                 PendingIntake[]
-  plan                           PlanType              @default(PRO)
+  trialFollowUpNotifications     TrialFollowUpNotification[]
+  plan                           PlanType                    @default(PRO)
   logoUrl                        String?
   brandColor                     String?
-  intakeEnabled                  Boolean               @default(false)
-  intakePublicToken              String?               @unique
-  reminderOffsets                Int[]                 @default([1440, 120])
+  intakeEnabled                  Boolean                     @default(false)
+  intakePublicToken              String?                     @unique
+  reminderOffsets                Int[]                       @default([1440, 120])
   paystackCustomerCode           String?
   paystackPlanCode               String?
   paystackSubscriptionCode       String?
@@ -146,33 +149,36 @@ model Clinic {
   paystackNextPaymentDate        DateTime?
   subscriptionEnds               DateTime?
   subscriptionHistory            SubscriptionHistory[]
+
+  @@index([isActive, plan, subscriptionEnds])
 }
 
 model Branch {
-  id                  String               @id @default(cuid())
-  clinicId            String
-  name                String
-  slug                String
-  country             String               @default("")
-  city                String               @default("")
-  area                String               @default("")
-  address             String               @default("")
-  phone               String               @default("")
-  isActive            Boolean              @default(true)
-  isPrimary           Boolean              @default(false)
-  intakeEnabled       Boolean              @default(false)
-  intakePublicToken   String?              @unique
-  createdAt           DateTime             @default(now())
-  updatedAt           DateTime             @updatedAt
-  clinic              Clinic               @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-  patients            Patient[]
-  pendingIntakes      PendingIntake[]
-  records             Record[]
-  appointments        Appointment[]
-  waitingEntries      WaitingRoom[]
-  invoices            Invoice[]
-  auditLogs           AuditLog[]
-  billingPayments     BillingPayment[]
+  id                String           @id @default(cuid())
+  clinicId          String
+  name              String
+  slug              String
+  country           String           @default("")
+  city              String           @default("")
+  area              String           @default("")
+  address           String           @default("")
+  phone             String           @default("")
+  isActive          Boolean          @default(true)
+  isPrimary         Boolean          @default(false)
+  intakeEnabled     Boolean          @default(false)
+  intakePublicToken String?          @unique
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  clinic            Clinic           @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patients          Patient[]
+  pendingIntakes    PendingIntake[]
+  records           Record[]
+  appointments      Appointment[]
+  waitingEntries    WaitingRoom[]
+  invoices          Invoice[]
+  auditLogs         AuditLog[]
+  billingPayments   BillingPayment[]
+
   @@unique([clinicId, slug])
   @@index([clinicId, isActive, createdAt])
 }
@@ -385,15 +391,19 @@ model AuditLog {
 }
 
 model BillingWebhook {
-  id          String    @id
-  eventType   String    @default("")
-  payload     Json      @default("{}")
-  signature   String?
-  processed   Boolean   @default(false)
-  attempts    Int       @default(0)
-  lastError   String?
-  processedAt DateTime?
-  receivedAt  DateTime  @default(now())
+  id                    String    @id
+  eventType             String    @default("")
+  payload               Json      @default("{}")
+  signature             String?
+  processed             Boolean   @default(false)
+  attempts              Int       @default(0)
+  lastError             String?
+  processedAt           DateTime?
+  receivedAt            DateTime  @default(now())
+  adminAlertAttempts    Int       @default(0)
+  adminAlertLastError   String?
+  adminAlertLockedUntil DateTime?
+  adminAlertSentAt      DateTime?
 
   @@index([processed])
 }
@@ -422,6 +432,25 @@ model SubscriptionHistory {
   clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
 
   @@index([clinicId])
+}
+
+model TrialFollowUpNotification {
+  id              String    @id @default(cuid())
+  clinicId        String
+  subscriptionEnd DateTime
+  milestone       String
+  status          String    @default("pending")
+  attempts        Int       @default(0)
+  lastAttemptAt   DateTime?
+  lockedUntil     DateTime?
+  sentAt          DateTime?
+  lastError       String    @default("")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  clinic          Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, subscriptionEnd, milestone])
+  @@index([status, lockedUntil])
 }
 
 model RateLimitCounter {

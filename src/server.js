@@ -5,8 +5,11 @@ import {
   stopAppointmentReminderWorker,
 } from "./services/appointmentReminderService.js";
 import { ensurePatientSearchIndexesBackfilled } from "./services/patientSearchIndex.js";
-import { startTrashCleanupWorker } from "./services/trashCleanupService.js";
 import { startBirthdayGreetingWorker } from "./services/birthdayGreetingService.js";
+import {
+  startTrialFollowUpWorker,
+  stopTrialFollowUpWorker,
+} from "./services/trialFollowUpService.js";
 import { prisma } from "./lib/prisma.js";
 import {
   startRateLimitCleanup,
@@ -29,6 +32,7 @@ const shutdown = async (signal) => {
   try {
     stopRateLimitCleanup();
     await stopAppointmentReminderWorker();
+    await stopTrialFollowUpWorker();
 
     if (server) {
       await new Promise((resolve, reject) => {
@@ -61,8 +65,8 @@ const startServer = async () => {
     });
     startAppointmentReminderWorker();
     ensurePatientSearchIndexesBackfilled();
-    startTrashCleanupWorker();
     startBirthdayGreetingWorker();
+    startTrialFollowUpWorker();
   } catch (err) {
     console.error("Failed to start server:", err);
     process.exit(1);

@@ -2,6 +2,7 @@ import { Queue, Worker, QueueScheduler } from "bullmq";
 import IORedis from "ioredis";
 import { prisma } from "../lib/prisma.js";
 import { processPaystackWebhookEvent } from "../services/paystack.js";
+import { notifyAdminOperationalIssue } from "../services/platformAlertService.js";
 
 const connection = new IORedis(
   process.env.REDIS_URL || "redis://127.0.0.1:6379",
@@ -18,7 +19,7 @@ const worker = new Worker(
     const webhookId = job.data.webhookId;
 
     try {
-      await processPaystackWebhookEvent(payload);
+      await processPaystackWebhookEvent(payload, { webhookId });
       if (webhookId) {
         await prisma.billingWebhook.update({
           where: { id: webhookId },
@@ -28,6 +29,7 @@ const worker = new Worker(
       return { ok: true };
     } catch (err) {
       console.error("Webhook job failed:", err);
+      void notifyAdminOperationalIssue("billing webhook processing");
       if (webhookId) {
         await prisma.billingWebhook.update({
           where: { id: webhookId },
@@ -45,6 +47,7 @@ const worker = new Worker(
 
 worker.on("failed", (job, err) => {
   console.error(`Job ${job.id} failed:`, err?.message || err);
+  void notifyAdminOperationalIssue("billing webhook processing");
 });
 
 worker.on("completed", (job) => {

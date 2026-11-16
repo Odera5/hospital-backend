@@ -15,6 +15,12 @@ const router = express.Router();
 
 const normalizeText = (value) => (typeof value === "string" ? value.trim() : "");
 const formatCardNumber = (sequence) => `P-${String(sequence).padStart(6, "0")}`;
+const isSubmissionKeyConflict = (error) =>
+  error instanceof Prisma.PrismaClientKnownRequestError &&
+  error.code === "P2002" &&
+  (Array.isArray(error.meta?.target)
+    ? error.meta.target.includes("submissionKey")
+    : String(error.meta?.target || "").includes("submissionKey"));
 
 const isPatientCardSequenceConflict = (error) =>
   error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -143,6 +149,53 @@ router.get("/:clinicId", async (req, res) => {
   }
 });
 
+// GET /api/intake/:clinicId/submission-status - Check whether this form session was submitted
+router.get("/:clinicId/submission-status", async (req, res) => {
+  try {
+    const { clinicId } = req.params;
+    const accessToken = String(req.query?.access || "").trim();
+    const requestedBranchId = String(req.query?.branchId || "").trim();
+    const submissionKey = String(req.query?.submissionId || "").trim();
+
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(submissionKey)) {
+      return res.status(400).json({ message: "A valid submission ID is required" });
+    }
+
+    const clinic = await prisma.clinic.findUnique({
+      where: { id: clinicId },
+      select: intakeAccessClinicSelect,
+    });
+
+    const isEnterprise = clinic?.plan === "ENTERPRISE";
+    const branch = isEnterprise
+      ? await getActiveBranchForIntake({
+          clinicId,
+          branchId: requestedBranchId,
+          accessToken,
+        })
+      : null;
+
+    const accessError = validateIntakeAccess(clinic, branch, accessToken);
+    if (accessError) {
+      return res.status(clinic ? 403 : 404).json({ message: accessError });
+    }
+
+    const submission = await prisma.pendingIntake.findFirst({
+      where: {
+        clinicId,
+        submissionKey,
+        ...(isEnterprise ? { branchId: branch.id } : {}),
+      },
+      select: { id: true },
+    });
+
+    res.json({ submitted: Boolean(submission) });
+  } catch (error) {
+    console.error("Intake submission status error:", error);
+    res.status(500).json({ message: "Failed to verify intake submission status" });
+  }
+});
+
 // GET /api/intake/:clinicId/available-slots - Fetch public available slots for a clinic
 router.get("/:clinicId/available-slots", async (req, res) => {
   try {
@@ -241,6 +294,24 @@ router.post("/:clinicId", publicIntakeLimiter, validatePublicIntake, async (req,
       return res.status(clinic ? 403 : 404).json({ message: accessError });
     }
 
+    const submissionKey = normalizeText(req.body?.submissionKey);
+    const existingSubmission = await prisma.pendingIntake.findUnique({
+      where: { submissionKey },
+      select: { clinicId: true, branchId: true },
+    });
+    if (existingSubmission) {
+      if (
+        existingSubmission.clinicId === clinicId &&
+        (!isEnterprise || existingSubmission.branchId === branch.id)
+      ) {
+        return res.json({
+          message: "This intake form has already been submitted.",
+          alreadySubmitted: true,
+        });
+      }
+      return res.status(409).json({ message: "This intake form session is invalid." });
+    }
+
     const name = normalizeText(req.body?.name);
     const age = normalizeText(req.body?.age);
     const gender = normalizeText(req.body?.gender) || "other";
@@ -283,27 +354,50 @@ router.post("/:clinicId", publicIntakeLimiter, validatePublicIntake, async (req,
       return res.status(400).json({ message: "No active branch is available for intake." });
     }
 
-    const pendingIntake = await prisma.pendingIntake.create({
-      data: {
-        clinicId,
-        branchId: targetBranchId,
-        name,
-        age,
-        dateOfBirth,
-        gender,
-        occupation,
-        phone,
-        email,
-        address,
-        nextOfKinName,
-        nextOfKinPhone,
-        nextOfKinRelationship,
-        nextOfKinAddress,
-        preferredDate,
-        preferredTime,
-        status: "pending"
+    let pendingIntake;
+    try {
+      pendingIntake = await prisma.pendingIntake.create({
+        data: {
+          clinicId,
+          branchId: targetBranchId,
+          name,
+          age,
+          dateOfBirth,
+          gender,
+          occupation,
+          phone,
+          email,
+          address,
+          nextOfKinName,
+          nextOfKinPhone,
+          nextOfKinRelationship,
+          nextOfKinAddress,
+          preferredDate,
+          preferredTime,
+          submissionKey,
+          status: "pending"
+        }
+      });
+    } catch (error) {
+      if (!isSubmissionKeyConflict(error)) {
+        throw error;
       }
-    });
+
+      const submittedIntake = await prisma.pendingIntake.findUnique({
+        where: { submissionKey },
+        select: { clinicId: true, branchId: true },
+      });
+      if (
+        submittedIntake?.clinicId === clinicId &&
+        (!isEnterprise || submittedIntake.branchId === branch.id)
+      ) {
+        return res.json({
+          message: "This intake form has already been submitted.",
+          alreadySubmitted: true,
+        });
+      }
+      return res.status(409).json({ message: "This intake form session is invalid." });
+    }
 
     await logAuditEvent(req, {
       action: "pending_intake.create",
@@ -315,7 +409,10 @@ router.post("/:clinicId", publicIntakeLimiter, validatePublicIntake, async (req,
       },
     });
 
-    res.status(201).json({ message: "Intake form submitted successfully. Your request is pending approval." });
+    res.status(201).json({
+      message: "Intake form submitted successfully. Your request is pending approval.",
+      alreadySubmitted: false,
+    });
   } catch (error) {
     console.error("Intake submission error:", error);
     res.status(500).json({ message: "Failed to submit intake form. Please try again." });

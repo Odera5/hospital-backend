@@ -6,6 +6,7 @@ import {
   hasActiveProAccess,
   isTrialingClinic,
 } from "../utils/subscriptionAccess.js";
+import { sendAdminPaymentFailureAlert } from "./emailVerification.js";
 
 const PAYSTACK_API_BASE_URL = "https://api.paystack.co";
 const PRO_PLAN_TYPE = "PRO";
@@ -624,7 +625,68 @@ export const disableClinicSubscription = async (
     },
   });
 
-export const processPaystackWebhookEvent = async (event) => {
+const notifyAdminOfPaymentFailure = async ({
+  webhookId,
+  clinic,
+  payload,
+  eventType,
+}) => {
+  if (!webhookId) return;
+
+  const now = new Date();
+  const claim = await prisma.billingWebhook.updateMany({
+    where: {
+      id: webhookId,
+      adminAlertSentAt: null,
+      OR: [
+        { adminAlertLockedUntil: null },
+        { adminAlertLockedUntil: { lt: now } },
+      ],
+    },
+    data: {
+      adminAlertAttempts: { increment: 1 },
+      adminAlertLockedUntil: new Date(now.getTime() + 10 * 60 * 1000),
+      adminAlertLastError: null,
+    },
+  });
+
+  if (claim.count === 0) return;
+
+  try {
+    await sendAdminPaymentFailureAlert({
+      clinic,
+      eventType,
+      reference: payload?.reference || payload?.id,
+      occurredAt: payload?.paid_at || payload?.created_at || now,
+    });
+    await prisma.billingWebhook.update({
+      where: { id: webhookId },
+      data: {
+        adminAlertSentAt: new Date(),
+        adminAlertLockedUntil: null,
+        adminAlertLastError: null,
+      },
+    });
+  } catch (error) {
+    try {
+      await prisma.billingWebhook.update({
+        where: { id: webhookId },
+        data: {
+          adminAlertLockedUntil: null,
+          adminAlertLastError: String(error?.message || error).slice(0, 1000),
+        },
+      });
+    } catch (updateError) {
+      console.error("Failed to record payment alert delivery failure:", updateError);
+    }
+    throw error;
+  }
+};
+
+export const processPaystackWebhookEvent = async (
+  event,
+  { webhookId } = {},
+) => {
   const eventType = String(event?.event || "").trim();
   const payload = event?.data || {};
 
@@ -720,7 +782,16 @@ export const processPaystackWebhookEvent = async (event) => {
       return null;
     }
 
-    return disableClinicSubscription(clinic.id, eventType);
+    const updatedClinic = await disableClinicSubscription(clinic.id, eventType);
+    if (eventType === "invoice.payment_failed") {
+      await notifyAdminOfPaymentFailure({
+        webhookId,
+        clinic,
+        payload,
+        eventType,
+      });
+    }
+    return updatedClinic;
   }
 
   return null;

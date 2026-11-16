@@ -1,4 +1,5 @@
 import { prisma } from "./lib/prisma.js";
+import { notifyAdminOperationalIssue } from "./services/platformAlertService.js";
 
 const connectDB = async () => {
   try {
@@ -12,6 +13,7 @@ const connectDB = async () => {
     console.log("PostgreSQL connected successfully!");
   } catch (error) {
     console.error("PostgreSQL connection failed:", error.message);
+    await notifyAdminOperationalIssue("database connection");
     process.exit(1);
   }
 };
