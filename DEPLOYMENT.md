@@ -51,11 +51,12 @@ The subscription-history migration creates the table required by plan upgrades a
 - New clinical attachments use private object storage. Do not make the R2 bucket public or expose its credentials to the browser.
 - Patient demographics are only partially encrypted by the current application. Keep database encryption at rest enabled and restrict database access to the backend service.
 - Do not count `src/middleware/fileEncryptor.js` as active protection; it is not wired into the attachment flow.
-- Trashed patients and clinical records remain recoverable. Permanent deletion is admin-only, requires a documented reason, and is recorded in the audit log; patient charts with payment history are protected. Establish applicable retention and legal-hold requirements before using permanent deletion.
+- Patient charts that remain in Trash for six months are permanently deleted, along with their clinical records and attachments. Charts with billing records are retained. Clinical records individually moved to their record-level Trash are not automatically purged. Confirm this retention period is appropriate for the clinic before deployment; do not bypass the billing-history safeguard with direct database changes.
 
 ## MVP runtime topology
 
 - Start with one backend application instance. The server currently starts reminder, birthday, trial follow-up, and patient-index jobs in-process; running multiple uncoordinated instances may duplicate some work.
+- The patient Trash cleanup worker starts with the backend and processes up to 100 expired charts per minute. It skips charts with payment history and removes linked clinical records and attachments when a chart expires.
 - Do not scale backend replicas until background jobs have a single-worker deployment or reliable distributed coordination.
 - The trial follow-up worker sends one internal digest when unpaid active trials reach 7-, 3-, or 1-day reminders, or expire. It excludes clinics with subscription history and does not include patient or clinical data. Verify the configured notification inbox and delivery channel before enabling the worker in production.
 - Configure HTTPS, health/readiness monitoring (`/health` and `/ready`), log retention/access controls, and an alert path for database or object-storage failures.

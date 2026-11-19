@@ -10,6 +10,10 @@ import {
   startTrialFollowUpWorker,
   stopTrialFollowUpWorker,
 } from "./services/trialFollowUpService.js";
+import {
+  startTrashCleanupWorker,
+  stopTrashCleanupWorker,
+} from "./services/trashCleanupService.js";
 import { prisma } from "./lib/prisma.js";
 import {
   startRateLimitCleanup,
@@ -33,6 +37,7 @@ const shutdown = async (signal) => {
     stopRateLimitCleanup();
     await stopAppointmentReminderWorker();
     await stopTrialFollowUpWorker();
+    await stopTrashCleanupWorker();
 
     if (server) {
       await new Promise((resolve, reject) => {
@@ -67,6 +72,7 @@ const startServer = async () => {
     ensurePatientSearchIndexesBackfilled();
     startBirthdayGreetingWorker();
     startTrialFollowUpWorker();
+    startTrashCleanupWorker();
   } catch (err) {
     console.error("Failed to start server:", err);
     process.exit(1);

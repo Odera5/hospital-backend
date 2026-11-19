@@ -61,6 +61,7 @@ model Patient {
   nextOfKinRelationship    String                   @default("")
   nextOfKinAddress         String                   @default("")
   isDeleted                Boolean                  @default(false)
+  deletedAt                DateTime?
   createdAt                DateTime                 @default(now())
   updatedAt                DateTime                 @updatedAt
   clinic                   Clinic                   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
@@ -84,6 +85,7 @@ model Patient {
   @@index([clinicId, isDeleted, ageNumber])
   @@index([branchId, isDeleted, ageNumber])
   @@index([clinicId, branchId, isDeleted, createdAt, id])
+  @@index([isDeleted, deletedAt])
 }
 
 model PendingIntake {
