@@ -6,6 +6,7 @@ import {
   getPaystackManageLink,
   initializePaystackCheckout,
   resumePaystackSubscription,
+  scheduleNextPaystackPayment,
   verifyPaystackCheckout,
   verifyPaystackCheckoutPublic,
   upgradeSubscription,
@@ -54,6 +55,12 @@ router.post(
   protect,
   authorizeRoles("admin"),
   resumePaystackSubscription,
+);
+router.post(
+  "/paystack/reschedule",
+  protect,
+  authorizeRoles("admin"),
+  scheduleNextPaystackPayment,
 );
 
 router.post("/upgrade", protect, authorizeRoles("admin"), upgradeSubscription);

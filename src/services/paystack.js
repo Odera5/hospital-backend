@@ -549,6 +549,57 @@ export const initializePaystackSubscription = async ({
   };
 };
 
+export const createScheduledPaystackSubscription = async ({
+  clinic,
+  startDate,
+}) => {
+  if (
+    !clinic?.paystackCustomerCode ||
+    !clinic?.paystackPlanCode ||
+    !clinic?.paystackAuthorizationCode
+  ) {
+    const error = new Error(
+      "This clinic does not have the saved Paystack details required to schedule its next payment.",
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const scheduledStartDate = new Date(startDate);
+  if (
+    Number.isNaN(scheduledStartDate.getTime()) ||
+    scheduledStartDate <= new Date()
+  ) {
+    const error = new Error(
+      "The scheduled payment date must be a valid future date.",
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const data = await callPaystack("/subscription", {
+    method: "POST",
+    body: JSON.stringify({
+      customer: clinic.paystackCustomerCode,
+      plan: clinic.paystackPlanCode,
+      authorization: clinic.paystackAuthorizationCode,
+      start_date: scheduledStartDate.toISOString(),
+    }),
+    retries: 0,
+  });
+
+  if (!data?.subscription_code || !data?.email_token) {
+    throw new Error(
+      "Paystack did not return the subscription details needed to save the scheduled payment.",
+    );
+  }
+
+  return {
+    ...data,
+    start_date: data.next_payment_date || scheduledStartDate.toISOString(),
+  };
+};
+
 export const syncClinicWithTransaction = async (transaction) => {
   const clinic = await findClinicForTransaction(transaction);
 

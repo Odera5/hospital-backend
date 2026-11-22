@@ -8,6 +8,7 @@ import {
   recoverClinicPaystackSubscription,
   generatePaystackManageLink,
   initializePaystackSubscription,
+  createScheduledPaystackSubscription,
   initializeOneOffCharge,
   getPlanConfig,
   computeSubscriptionEndDate,
@@ -19,6 +20,7 @@ import {
   verifyPaystackTransaction,
 } from "../services/paystack.js";
 import { notifyAdminOperationalIssue } from "../services/platformAlertService.js";
+import { resolveSubscriptionEndDate } from "../utils/subscriptionAccess.js";
 
 const buildPaystackVerificationResponse = ({
   clinic,
@@ -442,6 +444,160 @@ export const resumePaystackSubscription = async (req, res) => {
 
     return res.status(error.statusCode || 500).json({
       message: error.message || "Failed to resume Paystack subscription",
+    });
+  }
+};
+
+export const scheduleNextPaystackPayment = async (req, res) => {
+  try {
+    let clinic = await prisma.clinic.findUnique({
+      where: { id: req.user.clinicId },
+    });
+
+    if (!clinic) {
+      return res.status(404).json({ message: "Clinic not found" });
+    }
+
+    clinic = await recoverClinicPaystackSubscription(clinic, {
+      forceRefresh: true,
+    });
+
+    const accessThrough = resolveSubscriptionEndDate(clinic);
+    const nextPaymentDate = clinic.paystackNextPaymentDate
+      ? new Date(clinic.paystackNextPaymentDate)
+      : null;
+
+    if (!accessThrough || accessThrough <= new Date()) {
+      return res.status(400).json({
+        message:
+          "There is no future paid access period to align with a scheduled payment.",
+      });
+    }
+
+    if (!nextPaymentDate || nextPaymentDate >= accessThrough) {
+      return res.json({
+        message: "The next Paystack payment is already aligned with access.",
+        clinic: serializeBillingClinic(clinic),
+      });
+    }
+
+    if (
+      clinic.paystackSubscriptionCode &&
+      !clinic.paystackSubscriptionEmailToken
+    ) {
+      return res.status(400).json({
+        message:
+          "This clinic does not have enough Paystack subscription data to safely replace its billing schedule.",
+      });
+    }
+
+    const scheduledSubscription = await createScheduledPaystackSubscription({
+      clinic,
+      startDate: accessThrough,
+    });
+
+    const currentStatus = getNormalizedSubscriptionStatus(clinic);
+    const alreadyDisabledStatuses = new Set([
+      "non-renewing",
+      "cancelled",
+      "canceled",
+      "completed",
+      "disabled",
+      "subscription.disable",
+      "invoice.payment_failed",
+    ]);
+
+    let previousSubscriptionDisabled = false;
+    if (
+      clinic.paystackSubscriptionCode &&
+      clinic.paystackSubscriptionEmailToken &&
+      !alreadyDisabledStatuses.has(currentStatus)
+    ) {
+      try {
+        await disablePaystackSubscription({
+          subscriptionCode: clinic.paystackSubscriptionCode,
+          emailToken: clinic.paystackSubscriptionEmailToken,
+        });
+        previousSubscriptionDisabled = true;
+      } catch (error) {
+        if (!isInactivePaystackSubscriptionError(error)) {
+          try {
+            await disablePaystackSubscription({
+              subscriptionCode: scheduledSubscription.subscription_code,
+              emailToken: scheduledSubscription.email_token,
+            });
+          } catch (rollbackError) {
+            console.error(
+              "Failed to disable replacement Paystack subscription after the previous schedule could not be disabled:",
+              rollbackError,
+            );
+            void notifyAdminOperationalIssue(
+              "Paystack billing schedule rollback failure",
+            );
+            return res.status(502).json({
+              message:
+                "A replacement billing schedule was created, but the previous schedule could not be disabled. Contact support before retrying.",
+            });
+          }
+          throw error;
+        }
+      }
+    }
+
+    let updatedClinic;
+    try {
+      updatedClinic = await prisma.clinic.update({
+        where: { id: clinic.id },
+        data: {
+          paystackCustomerCode:
+            scheduledSubscription.customer?.customer_code ||
+            clinic.paystackCustomerCode,
+          paystackPlanCode:
+            scheduledSubscription.plan?.plan_code || clinic.paystackPlanCode,
+          paystackSubscriptionCode:
+            scheduledSubscription.subscription_code,
+          paystackSubscriptionEmailToken: scheduledSubscription.email_token,
+          paystackSubscriptionStatus:
+            scheduledSubscription.status || "active",
+          paystackNextPaymentDate: new Date(scheduledSubscription.start_date),
+          paystackLastReference: null,
+        },
+      });
+    } catch (error) {
+      console.error(
+        "Paystack schedule was created but could not be saved to the clinic:",
+        error,
+      );
+      void notifyAdminOperationalIssue(
+        "Paystack billing schedule database reconciliation",
+      );
+      return res.status(500).json({
+        message:
+          "Paystack scheduled the next payment, but CareChrome could not save the updated billing details. Refresh billing or contact support before retrying.",
+      });
+    }
+
+    const auditScope = getSubscriptionAuditScope(req);
+    await logAuditEvent(req, {
+      action: `${auditScope.actionPrefix}.payment_date_rescheduled`,
+      resourceType: auditScope.resourceType,
+      resourceId: clinic.id,
+      metadata: {
+        previousStatus: currentStatus,
+        previousSubscriptionDisabled,
+        previousNextPaymentDate: nextPaymentDate.toISOString(),
+        nextPaymentDate: new Date(scheduledSubscription.start_date).toISOString(),
+      },
+    });
+
+    return res.json({
+      message: `Your next Paystack payment is scheduled for ${new Date(scheduledSubscription.start_date).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}. No payment was taken today.`,
+      clinic: serializeBillingClinic(updatedClinic),
+    });
+  } catch (error) {
+    console.error("Schedule next Paystack payment error:", error);
+    return res.status(error.statusCode || 500).json({
+      message: error.message || "Failed to schedule the next Paystack payment",
     });
   }
 };

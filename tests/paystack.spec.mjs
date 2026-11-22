@@ -8,6 +8,7 @@ import {
   verifyPaystackSignature,
   computeSubscriptionEndDate,
   computeSubscriptionEndDateForClinic,
+  createScheduledPaystackSubscription,
   wasPaystackTransactionAlreadyApplied,
 } from "../src/services/paystack.js";
 
@@ -113,6 +114,52 @@ assert.strictEqual(
   true,
   "An applied payment should remain idempotent when auto-renew is disabled",
 );
-console.log("✓ first subscription, paid renewal, and idempotency dates pass");
+
+const originalFetch = globalThis.fetch;
+let scheduledSubscriptionRequest;
+globalThis.fetch = async (url, options) => {
+  scheduledSubscriptionRequest = { url, options };
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      status: true,
+      data: {
+        subscription_code: "SUB_scheduled",
+        email_token: "scheduled-token",
+      },
+    }),
+  };
+};
+
+try {
+  const scheduledStartDate = "2030-12-06T00:00:00.000Z";
+  const scheduledSubscription = await createScheduledPaystackSubscription({
+    clinic: {
+      paystackCustomerCode: "CUS_test",
+      paystackPlanCode: "PLN_test",
+      paystackAuthorizationCode: "AUTH_test",
+    },
+    startDate: scheduledStartDate,
+  });
+  const requestBody = JSON.parse(scheduledSubscriptionRequest.options.body);
+
+  assert.strictEqual(
+    scheduledSubscriptionRequest.url,
+    "https://api.paystack.co/subscription",
+    "Scheduled billing should create a Paystack subscription",
+  );
+  assert.strictEqual(requestBody.start_date, scheduledStartDate);
+  assert.strictEqual(requestBody.authorization, "AUTH_test");
+  assert.strictEqual(
+    scheduledSubscription.start_date,
+    scheduledStartDate,
+    "Use the requested date when Paystack does not return next_payment_date",
+  );
+} finally {
+  globalThis.fetch = originalFetch;
+}
+
+console.log("✓ first purchase, paid renewal, idempotency, and scheduling pass");
 
 console.log("All paystack tests passed.");
