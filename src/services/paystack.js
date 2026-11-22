@@ -532,6 +532,7 @@ export const initializePaystackSubscription = async ({
       email: clinic.email,
       amount: config.amount,
       plan: planCode,
+      channels: ["card"],
       currency: "NGN",
       reference,
       callback_url: `${callbackBaseUrl}/billing/paystack/callback`,
@@ -645,6 +646,14 @@ export const createScheduledPaystackSubscription = async ({
   };
 };
 
+export const getReusableAuthorizationCode = (
+  authorization,
+  existingAuthorizationCode = null,
+) =>
+  authorization?.reusable === true && authorization.authorization_code
+    ? authorization.authorization_code
+    : existingAuthorizationCode;
+
 export const syncClinicWithTransaction = async (transaction) => {
   const clinic = await findClinicForTransaction(transaction);
 
@@ -697,9 +706,10 @@ export const syncClinicWithTransaction = async (transaction) => {
         transaction?.subscription?.email_token ||
         transaction?.email_token ||
         clinic.paystackSubscriptionEmailToken,
-      paystackAuthorizationCode:
-        transaction?.authorization?.authorization_code ||
+      paystackAuthorizationCode: getReusableAuthorizationCode(
+        transaction?.authorization,
         clinic.paystackAuthorizationCode,
+      ),
       paystackLastReference:
         transactionReference || clinic.paystackLastReference,
       paystackNextPaymentDate: transaction?.subscription?.next_payment_date

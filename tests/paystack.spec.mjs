@@ -9,6 +9,8 @@ import {
   computeSubscriptionEndDate,
   computeSubscriptionEndDateForClinic,
   createScheduledPaystackSubscription,
+  getReusableAuthorizationCode,
+  initializePaystackSubscription,
   wasPaystackTransactionAlreadyApplied,
 } from "../src/services/paystack.js";
 
@@ -114,6 +116,69 @@ assert.strictEqual(
   true,
   "An applied payment should remain idempotent when auto-renew is disabled",
 );
+
+assert.strictEqual(
+  getReusableAuthorizationCode(
+    { authorization_code: "AUTH_reusable", reusable: true },
+    "AUTH_existing",
+  ),
+  "AUTH_reusable",
+  "A reusable authorization should be saved for future recurring charges",
+);
+assert.strictEqual(
+  getReusableAuthorizationCode(
+    { authorization_code: "AUTH_one_time", reusable: false },
+    "AUTH_existing",
+  ),
+  "AUTH_existing",
+  "A non-reusable authorization must not replace the saved recurring authorization",
+);
+
+const originalCheckoutFetch = globalThis.fetch;
+const originalProPlanCode = process.env.PAYSTACK_PRO_PLAN_CODE;
+let subscriptionCheckoutRequest;
+process.env.PAYSTACK_PRO_PLAN_CODE = "PLN_pro_test";
+globalThis.fetch = async (url, options) => {
+  subscriptionCheckoutRequest = { url, options };
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      status: true,
+      data: {
+        authorization_url: "https://checkout.paystack.com/test",
+        access_code: "test-access-code",
+        reference: "test-reference",
+      },
+    }),
+  };
+};
+
+try {
+  await initializePaystackSubscription({
+    clinic: {
+      id: "clinic-card-only",
+      email: "billing@example.com",
+      name: "Test Clinic",
+    },
+    actor: { id: "admin-1", email: "admin@example.com" },
+    planType: "PRO",
+    interval: "monthly",
+  });
+  const checkoutBody = JSON.parse(subscriptionCheckoutRequest.options.body);
+  assert.deepStrictEqual(
+    checkoutBody.channels,
+    ["card"],
+    "Subscription checkout should only offer card authorization for recurring billing",
+  );
+} finally {
+  globalThis.fetch = originalCheckoutFetch;
+  if (originalProPlanCode === undefined) {
+    delete process.env.PAYSTACK_PRO_PLAN_CODE;
+  } else {
+    process.env.PAYSTACK_PRO_PLAN_CODE = originalProPlanCode;
+  }
+}
 
 const originalFetch = globalThis.fetch;
 const scheduledApiRequests = [];
