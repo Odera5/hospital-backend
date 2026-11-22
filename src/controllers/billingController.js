@@ -397,17 +397,101 @@ export const resumePaystackSubscription = async (req, res) => {
       });
     }
 
+    const accessThrough = resolveSubscriptionEndDate(clinic);
+    const hasFutureAccess = accessThrough && accessThrough > new Date();
+
+    const scheduleRenewalAfterAccess = async () => {
+      if (!hasFutureAccess) {
+        return null;
+      }
+
+      const scheduledSubscription = await createScheduledPaystackSubscription({
+        clinic,
+        startDate: accessThrough,
+      });
+
+      let updatedClinic;
+      try {
+        updatedClinic = await prisma.clinic.update({
+          where: { id: clinic.id },
+          data: {
+            paystackCustomerCode:
+              scheduledSubscription.customer?.customer_code ||
+              clinic.paystackCustomerCode,
+            paystackPlanCode:
+              scheduledSubscription.plan?.plan_code || clinic.paystackPlanCode,
+            paystackSubscriptionCode:
+              scheduledSubscription.subscription_code,
+            paystackSubscriptionEmailToken: scheduledSubscription.email_token,
+            paystackSubscriptionStatus:
+              scheduledSubscription.status || "active",
+            paystackNextPaymentDate: new Date(scheduledSubscription.start_date),
+            paystackLastReference: null,
+          },
+        });
+      } catch (error) {
+        console.error(
+          "Paystack renewal was scheduled but could not be saved to the clinic:",
+          error,
+        );
+        void notifyAdminOperationalIssue(
+          "Paystack renewal schedule database reconciliation",
+        );
+        return res.status(500).json({
+          message:
+            "Paystack scheduled the renewal, but CareChrome could not save the updated billing details. Contact support before retrying.",
+        });
+      }
+
+      const auditScope = getSubscriptionAuditScope(req);
+      await logAuditEvent(req, {
+        action: `${auditScope.actionPrefix}.subscription_resumed`,
+        resourceType: auditScope.resourceType,
+        resourceId: clinic.id,
+        metadata: {
+          status: "active",
+          rescheduledAfterCancellation: true,
+          nextPaymentDate: new Date(
+            scheduledSubscription.start_date,
+          ).toISOString(),
+          page: "upgrade",
+          plan: updatedClinic.plan,
+        },
+      });
+
+      return res.json({
+        message: `Auto-renew has been scheduled to resume on ${new Date(scheduledSubscription.start_date).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}. No payment was taken today.`,
+        clinic: serializeBillingClinic(updatedClinic),
+      });
+    };
+
     if (isFinalPaystackSubscriptionStatus(clinic)) {
+      if (hasFutureAccess) {
+        return scheduleRenewalAfterAccess();
+      }
+
       return res.status(400).json({
         message: cannotResumeSubscriptionMessage,
         clinic: serializeBillingClinic(clinic),
       });
     }
 
-    await enablePaystackSubscription({
-      subscriptionCode: clinic.paystackSubscriptionCode,
-      emailToken: clinic.paystackSubscriptionEmailToken,
-    });
+    try {
+      await enablePaystackSubscription({
+        subscriptionCode: clinic.paystackSubscriptionCode,
+        emailToken: clinic.paystackSubscriptionEmailToken,
+      });
+    } catch (error) {
+      if (!isCannotReactivatePaystackSubscriptionError(error)) {
+        throw error;
+      }
+
+      if (hasFutureAccess) {
+        return scheduleRenewalAfterAccess();
+      }
+
+      throw error;
+    }
 
     const updatedClinic = await prisma.clinic.update({
       where: { id: clinic.id },
