@@ -302,6 +302,43 @@ const computeSubscriptionEndDate = ({
   }
 };
 
+export const computeSubscriptionEndDateForClinic = ({
+  clinic,
+  paidAt,
+  interval,
+}) => {
+  const hasExistingPaystackBillingCycle = Boolean(
+    clinic?.paystackSubscriptionStatus ||
+      clinic?.paystackSubscriptionCode ||
+      clinic?.paystackNextPaymentDate,
+  );
+
+  return computeSubscriptionEndDate({
+    paidAt,
+    interval,
+    currentSubscriptionEnds: hasExistingPaystackBillingCycle
+      ? clinic.subscriptionEnds
+      : null,
+  });
+};
+
+export const wasPaystackTransactionAlreadyApplied = (
+  clinic,
+  transactionReference,
+) => {
+  const subscriptionEnds = clinic?.subscriptionEnds
+    ? new Date(clinic.subscriptionEnds)
+    : null;
+
+  return Boolean(
+    transactionReference &&
+      clinic?.paystackLastReference === transactionReference &&
+      hasActivePaidSubscription(clinic) &&
+      subscriptionEnds &&
+      subscriptionEnds > new Date(),
+  );
+};
+
 const resolveMetadataClinicId = (payload) =>
   payload?.metadata?.clinicId ||
   payload?.metadata?.custom_fields?.find(
@@ -505,13 +542,6 @@ export const initializePaystackSubscription = async ({
     idempotencyKey: reference,
   });
 
-  await prisma.clinic.update({
-    where: { id: clinic.id },
-    data: {
-      paystackLastReference: data.reference,
-    },
-  });
-
   return {
     authorizationUrl: data.authorization_url,
     accessCode: data.access_code,
@@ -529,16 +559,15 @@ export const syncClinicWithTransaction = async (transaction) => {
   const resolvedPlanType = resolveTransactionPlanType(transaction, clinic.plan);
 
   const transactionReference = transaction?.reference || null;
-  const alreadyProcessedReference = Boolean(
-    transactionReference &&
-    clinic.paystackLastReference === transactionReference &&
-    clinic.paystackSubscriptionStatus &&
-    clinic.subscriptionEnds,
+  const alreadyProcessedReference = wasPaystackTransactionAlreadyApplied(
+    clinic,
+    transactionReference,
   );
 
   const subscriptionEnds = alreadyProcessedReference
     ? clinic.subscriptionEnds
-    : computeSubscriptionEndDate({
+    : computeSubscriptionEndDateForClinic({
+        clinic,
         paidAt:
           transaction?.paid_at ||
           transaction?.paidAt ||
@@ -547,7 +576,6 @@ export const syncClinicWithTransaction = async (transaction) => {
           transaction?.plan_object?.interval ||
           transaction?.plan?.interval ||
           MONTHLY_INTERVAL,
-        currentSubscriptionEnds: clinic.subscriptionEnds,
       });
 
   const updatedClinic = await prisma.clinic.update({

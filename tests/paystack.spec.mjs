@@ -7,6 +7,8 @@ import path from "path";
 import {
   verifyPaystackSignature,
   computeSubscriptionEndDate,
+  computeSubscriptionEndDateForClinic,
+  wasPaystackTransactionAlreadyApplied,
 } from "../src/services/paystack.js";
 
 console.log("Running paystack unit tests...");
@@ -47,5 +49,70 @@ assert.strictEqual(
   "Annual interval should add 12 months",
 );
 console.log("✓ computeSubscriptionEndDate passes");
+
+const trialPeriodEnd = "2030-12-06T00:00:00.000Z";
+const paymentDate = "2030-11-22T00:00:00.000Z";
+const firstSubscriptionEnd = computeSubscriptionEndDateForClinic({
+  clinic: { subscriptionEnds: new Date(trialPeriodEnd) },
+  paidAt: paymentDate,
+  interval: "monthly",
+});
+assert.strictEqual(
+  new Date(firstSubscriptionEnd).toISOString(),
+  "2030-12-22T00:00:00.000Z",
+  "A first paid subscription should start from payment date, not stack unused trial time",
+);
+
+const renewedSubscriptionEnd = computeSubscriptionEndDateForClinic({
+  clinic: {
+    subscriptionEnds: new Date(trialPeriodEnd),
+    paystackSubscriptionStatus: "cancelled",
+  },
+  paidAt: paymentDate,
+  interval: "monthly",
+});
+assert.strictEqual(
+  new Date(renewedSubscriptionEnd).toISOString(),
+  "2031-01-06T00:00:00.000Z",
+  "Renewal should preserve remaining time from an existing paid subscription",
+);
+
+assert.strictEqual(
+  wasPaystackTransactionAlreadyApplied(
+    {
+      paystackLastReference: "previous-reference",
+      paystackSubscriptionStatus: "non-renewing",
+      subscriptionEnds: new Date(trialPeriodEnd),
+    },
+    "renewal-reference",
+  ),
+  false,
+  "A new checkout on a non-renewing subscription must not be mistaken for an already-applied payment",
+);
+assert.strictEqual(
+  wasPaystackTransactionAlreadyApplied(
+    {
+      paystackLastReference: "renewal-reference",
+      paystackSubscriptionStatus: "active",
+      subscriptionEnds: new Date("2031-01-06T00:00:00.000Z"),
+    },
+    "renewal-reference",
+  ),
+  true,
+  "A successfully applied payment should not extend access twice",
+);
+assert.strictEqual(
+  wasPaystackTransactionAlreadyApplied(
+    {
+      paystackLastReference: "renewal-reference",
+      paystackSubscriptionStatus: "non-renewing",
+      subscriptionEnds: new Date("2031-01-06T00:00:00.000Z"),
+    },
+    "renewal-reference",
+  ),
+  true,
+  "An applied payment should remain idempotent when auto-renew is disabled",
+);
+console.log("✓ first subscription, paid renewal, and idempotency dates pass");
 
 console.log("All paystack tests passed.");
