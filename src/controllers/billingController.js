@@ -491,11 +491,6 @@ export const scheduleNextPaystackPayment = async (req, res) => {
       });
     }
 
-    const scheduledSubscription = await createScheduledPaystackSubscription({
-      clinic,
-      startDate: accessThrough,
-    });
-
     const currentStatus = getNormalizedSubscriptionStatus(clinic);
     const alreadyDisabledStatuses = new Set([
       "non-renewing",
@@ -521,27 +516,39 @@ export const scheduleNextPaystackPayment = async (req, res) => {
         previousSubscriptionDisabled = true;
       } catch (error) {
         if (!isInactivePaystackSubscriptionError(error)) {
-          try {
-            await disablePaystackSubscription({
-              subscriptionCode: scheduledSubscription.subscription_code,
-              emailToken: scheduledSubscription.email_token,
-            });
-          } catch (rollbackError) {
-            console.error(
-              "Failed to disable replacement Paystack subscription after the previous schedule could not be disabled:",
-              rollbackError,
-            );
-            void notifyAdminOperationalIssue(
-              "Paystack billing schedule rollback failure",
-            );
-            return res.status(502).json({
-              message:
-                "A replacement billing schedule was created, but the previous schedule could not be disabled. Contact support before retrying.",
-            });
-          }
           throw error;
         }
       }
+    }
+
+    let scheduledSubscription;
+    try {
+      scheduledSubscription = await createScheduledPaystackSubscription({
+        clinic,
+        startDate: accessThrough,
+      });
+    } catch (error) {
+      if (previousSubscriptionDisabled) {
+        try {
+          await enablePaystackSubscription({
+            subscriptionCode: clinic.paystackSubscriptionCode,
+            emailToken: clinic.paystackSubscriptionEmailToken,
+          });
+        } catch (rollbackError) {
+          console.error(
+            "Failed to restore the previous Paystack subscription after scheduling failed:",
+            rollbackError,
+          );
+          void notifyAdminOperationalIssue(
+            "Paystack billing schedule rollback failure",
+          );
+          return res.status(502).json({
+            message:
+              "The replacement schedule could not be created and the previous schedule could not be restored. Contact support before retrying.",
+          });
+        }
+      }
+      throw error;
     }
 
     let updatedClinic;

@@ -504,6 +504,12 @@ export const ensurePaystackPlan = async (
   return createdPlan.plan_code;
 };
 
+export const fetchPaystackPlan = async (planCode) => {
+  return callPaystack(`/plan/${encodeURIComponent(planCode)}`, {
+    method: "GET",
+  });
+};
+
 export const initializePaystackSubscription = async ({
   clinic,
   actor,
@@ -577,11 +583,49 @@ export const createScheduledPaystackSubscription = async ({
     throw error;
   }
 
+  const currentPlan = await fetchPaystackPlan(clinic.paystackPlanCode);
+  if (
+    !currentPlan?.plan_code ||
+    !Number.isFinite(Number(currentPlan.amount)) ||
+    !currentPlan.interval
+  ) {
+    throw new Error(
+      "Paystack did not return the current plan details needed to schedule the next payment.",
+    );
+  }
+
+  const dateSuffix = scheduledStartDate
+    .toISOString()
+    .slice(0, 10)
+    .replace(/-/g, "");
+  const clinicSuffix = String(clinic.id || "").slice(-8);
+  const planName = String(currentPlan.name || "CareChrome Subscription");
+  const replacementPlan = await callPaystack("/plan", {
+    method: "POST",
+    body: JSON.stringify({
+      name: `${planName} (CC-${clinicSuffix}-${dateSuffix})`,
+      amount: Number(currentPlan.amount),
+      interval: currentPlan.interval,
+      description: currentPlan.description || "",
+      currency: currentPlan.currency || "NGN",
+      send_invoices: currentPlan.send_invoices,
+      send_sms: currentPlan.send_sms,
+      ...(currentPlan.invoice_limit
+        ? { invoice_limit: currentPlan.invoice_limit }
+        : {}),
+    }),
+    retries: 0,
+  });
+
+  if (!replacementPlan?.plan_code) {
+    throw new Error("Paystack did not return a replacement plan code.");
+  }
+
   const data = await callPaystack("/subscription", {
     method: "POST",
     body: JSON.stringify({
       customer: clinic.paystackCustomerCode,
-      plan: clinic.paystackPlanCode,
+      plan: replacementPlan.plan_code,
       authorization: clinic.paystackAuthorizationCode,
       start_date: scheduledStartDate.toISOString(),
     }),
@@ -596,6 +640,7 @@ export const createScheduledPaystackSubscription = async ({
 
   return {
     ...data,
+    plan: replacementPlan,
     start_date: data.next_payment_date || scheduledStartDate.toISOString(),
   };
 };
